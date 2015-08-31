@@ -10,11 +10,14 @@ Commands
 Settings
 ========
 
-For this to work as expected, it helps for you to set those defaults up
- to suit your working style beforehand.
+For this to work as expected, it helps for you to set defaults up
+ for your local development environment to suit your working style beforehand.
 Default settings should be added to your ~/.drushrc.php file.
 Your current settings can be checked using the get-setup command,
   which should provide prompts and instructions where needed.
+
+You'll need to define WHERE to copy site files down to (your docroots)
+and how to add to your local development databases (an admin SQL user)
 
 Example settings
 ----------------
@@ -24,20 +27,35 @@ Example settings
     
     # Where my local site-alias files are stored
     # @see example.drushrc.php
-    # If using the --save write-back option,
-    # this should be writable, but that is optional.
     $options['alias-path'][] = '/var/drush/site-aliases';
 
     # Where I build sites on my local machine.
-    # Projects will be downloaded and built under here.
-    # this defines my naming convention for building projects.
     $options['get-docroot-pattern'] = '/var/www/%short-name/%docroot-name';
-    # A simpler alternative may be
-    # $options['get-docroot-pattern'] = '/var/www/%uri/docroot';
-    
-Available Tokens in the get-docroot-pattern
+
+### get-master-alias
+
+Identify a (probably remote) Drupal instance that has access to a shared
+site-alias repository.
+Use this in a shared development workflow, 
+so all staff can easily pull in info about all projects as needed.
+
+### alias-path
+
+If using the --save write-back option,
+the primary alias-path should be writable, but that is optional.
+
+### get-docroot-pattern
+
+Projects will be downloaded and built under here.
+This defines my naming convention for building projects.
+A simple static pattern may be
+
+    $options['get-docroot-pattern'] = '/var/www/%uri/docroot';
+
+### Tokens in the get-docroot-pattern
   Any values in the sites config array may be used, eg
   %client_name (an Aegir thing it injects into the $alias array)
+  Additionally, some extra tokens are made available.
   
   %short-name will be the first one of :
   - the 'short-name' value in the site-alias if set.
@@ -48,3 +66,9 @@ Available Tokens in the get-docroot-pattern
   - the 'role' from site-alias if set, eg 'dev', 'test', 'uat'.
   - the string 'docroot'
    
+   
+### db-su, db-su-pw
+  As used in drush site-install, the Database superuser credentials
+  required for creating new databases.
+ 
+ See 

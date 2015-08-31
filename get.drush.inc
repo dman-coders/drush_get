@@ -2,6 +2,13 @@
 /**
  * @file
  * Utility for quick mirroring of sites to local dev environments.
+ *
+ * Wrapper around drush site-install, drush sql-sync and drush rsync type
+ * processes, but built to prefill a load of defaults wherever possible.
+ *
+ * Designed for teams working on many disparite sites at once to collaborate
+ * quicker and use local dev environments (eg acquia dev desktop) more
+ * efficiently..
  */
 
 /**
@@ -66,10 +73,11 @@ function get_drush_command() {
   );
 
   $items['get'] = array(
+    'callback' => 'drush_get_site',
     'description' => dt('Take a local copy of the named site.'),
     'arguments' => array(
       'source-site-alias' => 'Original site alias to be copied. If the site-alias is not yet known, the --master-alias instance will be queried to try and find it.',
-      'example-value' => 'dev.projectname.sharedserver',
+      'example-value' => '@dev.projectname.sharedserver',
     ),
     'options' => $options + array(
       'make-url' => array(
@@ -94,7 +102,7 @@ function get_drush_command() {
     'topic' => TRUE,
     'bootstrap' => DRUSH_BOOTSTRAP_DRUSH,
     'callback' => 'drush_print_file',
-    'callback arguments' => array(dirname(__FILE__). '/README.md'),
+    'callback arguments' => array(dirname(__FILE__) . '/README.md'),
   );
   return $items;
 }
@@ -110,6 +118,32 @@ function drush_get_setup() {
   $out = array();
   $master_alias = drush_get_option('master-alias', '');
   $strings['@master-alias'] = $master_alias;
+
+  // Check local environment preferences.
+  // docroot is needed.
+  $get_docroot_pattern = drush_get_option('get-docroot-pattern', '/var/www/%short-name/%docroot-name');
+  $sampleproject = array(
+    'uri' => 'sampleproject.remotehost.demo',
+    'name' => 'sampleproject',
+    'role' => 'dev',
+  );
+  $local_root = drush_get_process_tokens($get_docroot_pattern, $sampleproject);
+  $strings['@get-docroot-pattern'] = $get_docroot_pattern;
+  $strings['@local_root'] = $local_root;
+  drush_log(dt("Your generic docroot pattern is @get-docroot-pattern . This can be adjusted in your own drushrc.php, see 'drush topic get' for more.", $strings), 'success');
+  drush_log(dt("Locally copied sites will be saved in paths such as @local_root .", $strings), 'success');
+
+  // Admin database-superuser login is needed.
+  $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name:%random@localhost:3303/%short-name');
+  $db_su = drush_get_option('db-su', 'sqladmin');
+  $local_db = drush_get_process_tokens($get_db_pattern, $sampleproject);
+  $strings['@db-su'] = $db_su;
+  $strings['@get-db-pattern'] = $get_db_pattern;
+  $strings['@local_db'] = $local_db;
+  drush_log(dt("Your generic database connection pattern is @get-db-pattern and your database admin user is @db-su . This can be adjusted in your own drushrc.php, see 'drush topic get' for more.", $strings), 'success');
+  drush_log(dt("Locally copied sites will be stored in the database identified like @local_db .", $strings), 'success');
+
+
 
   if (empty($master_alias)) {
     drush_log("No master-alias is set", 'warning');
@@ -132,18 +166,67 @@ function drush_get_setup() {
       $strings['@remote-host'] = $master_spec['remote-host'];
       $strings['@remote-user'] = $master_spec['remote-user'];
       drush_log(dt("master-alias is to be found at @remote-user@@remote-host", $strings), 'info');
+
       // Test connection to master-alias.
-      drush_print(dt('Checking availability of @master-alias', $strings));
-      $lookup_results = drush_invoke_process($master_alias, 'status', array(), array(), FALSE);
+      drush_print(dt('Checking connection to "@remote-host" and drush version there.', $strings));
+
+      $commandline_options = array();
+      // I wanted to avoid a timeout here, as this is just a probe,
+      // but these options get interpreted by
+      // drush and therefore die when --strict options are on.
+      // $commandline_options = array(
+      // 'ssh-options' => '-o ConnectTimeout=10'
+      // );
+      //
+      // Before testing the master site itself, test the remote drush version.
+      // It seems we get best results when using drush6+ ! Drush4 bad.
+      // Use --strict=0 because drush 'version' does not expect
+      // the 'uri' param that drush_invoke_process adds.
+      $lookup_results = drush_invoke_process($master_alias, 'version --pipe --strict=0', $commandline_options, array(), FALSE);
+      if ($lookup_results['error_status'] != 0) {
+        drush_log(dt('Connection to "@remote-host" to check the remote drush version failed. Try this command with --verbose to see what may have gone wrong.', $strings), 'error');
+        return FALSE;
+      }
+      // Version result may come back as 6.2, or 5.0-dev.
+      // Just want the major really.
+      $remote_drush_version = floatval($lookup_results['output']);
+      $strings['@remote_drush_version'] = $lookup_results['output'];
+      drush_log(dt('Remote connection succeded and drush version on "@remote-host" was reported as @remote_drush_version.', $strings), 'success');
+
+      // Boring. The way data was returned is different between drush 5 & 6.
+      $drush_bootstrap_key = 'bootstrap';
+      if ($remote_drush_version < 6) {
+        drush_log(dt('Some features of the drush_get tool have only been found to work against drush 6+ . Lower versions MAY work, but the diagnostics we have to work with are more likely to fail. I suggest installing a higher version of drush, and checking the drush-script for the target server.', $strings), 'warning');
+        $drush_bootstrap_key = 'Drupal bootstrap';
+      }
+
+
+      drush_print(dt('Checking availability and status of master-alias site @master-alias', $strings));
+      $lookup_results = drush_invoke_process($master_alias, 'status', $commandline_options, array(), FALSE);
       // $lookup_results['output'] = "raw text"
       // $lookup_results['object'] = array() # Array version of that.
       // $lookup_results['error_status'] = 0 # If lucky.
-      // A success would be:
-      if ($lookup_results['object']['Drupal bootstrap'] == 'Successful') {
-        drush_log(dt('Connection to master-alias @master-alias succeeded', $strings), 'ok');
+      // Unlucky looks like
+      // $lookup_results['log'] = array([messages]);
+      // $lookup_results['error_log']
+      // = array(DRUPAL_USER_LOGIN_FAILED
+      // =>  "Could not login with user account `1'.");
+      // .
+
+      $bootstrap = $lookup_results['object'][$drush_bootstrap_key];
+
+      if ($bootstrap == 'Successful') {
+        drush_log(dt('Connection to master-alias @master-alias and Drupal bootstrap succeeded.', $strings), 'success');
+        print_r($lookup_results['object']);
+        if ($remote_drush_version >= 6) {
+          $strings['@remote_alias_count'] = count($lookup_results['object']['drush-alias-files']);
+          drush_log(dt('Remote master-alias knows about @remote_alias_count alias files over there.', $strings), 'info');
+        }
       }
       else {
-        drush_log(dt('Connection to master-alias @master-alias failed', $strings), 'error');
+        drush_log(dt('Connection to master-alias @master-alias failed. Try this command with --verbose to see what may have gone wrong.', $strings), 'error');
+        print_r($lookup_results);
+        print_r($lookup_results['error_log']);
       }
 
     }
@@ -153,11 +236,88 @@ function drush_get_setup() {
 }
 
 /**
+ * Calculate the appropriate storage path for a local project.
+ *
+ * See the README.md topic on available tokens.
+ *
+ * @param string $pattern
+ *   Pattern for deriving the project path using substitutions.
+ * @param array $site_alias
+ *   A site alias containing a number of keys that could be useful as
+ *   substititions.
+ *
+ * @return string
+ *   The processed result.
+ */
+function drush_get_process_tokens($pattern, $site_alias) {
+  $strings = array();
+  // Copy all strings and paths as substitute tokens.
+  foreach ($site_alias as $key => $value) {
+    if (is_string($value)) {
+      $strings['%' . $key] = $value;
+    }
+  }
+  $strings += (array) $site_alias['path-aliases'];
+
+  if (!isset($strings['%short-name'])) {
+    if (isset($strings['%name'])) {
+      $strings['%short-name'] = $strings['%name'];
+    }
+    else {
+      $strings['%short-name'] = $strings['%uri'];
+    }
+  }
+  // Shortname must always be safe for filesystem and database identifiers.
+  $strings['%short-name'] = preg_replace('/[^a-z0-9]+/', '-', strtolower($strings['%short-name']));
+
+
+  if (!isset($strings['%docroot-name'])) {
+    if (isset($strings['%role'])) {
+      $strings['%docroot-name'] = $strings['%role'];
+    }
+    else {
+      $strings['%docroot-name'] = 'docroot';
+    }
+
+  }
+
+  $strings['%random'] = _drush_get_random();
+
+  return strtr($pattern, $strings);
+
+}
+
+/**
+ * Generate a random alphanumeric string (as for a password).
+ *
+ * This is a copy of Drupal core's user_password() function.
+ * as duplicated by provision.inc also.
+ *
+ * @see user_password()
+*/
+function _drush_get_random($length = 10) {
+  $allowable_characters = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  $len = strlen($allowable_characters) - 1;
+  $pass = '';
+  for ($i = 0; $i < $length; $i++) {
+    $pass .= $allowable_characters[mt_rand(0, $len)];
+  }
+  return $pass;
+}
+
+
+/**
  * Execute `drush get-whois` command.
  *
  * If the named site alias is unknown, query the master-alias site for it.
  *
  * Optionally store the info locally.
+ *
+ * @param string $site_alias
+ *   Site identifier.
+ *
+ * @return array
+ *   site-alias
  */
 function drush_get_whois($site_alias) {
   // nb.
@@ -174,13 +334,11 @@ function drush_get_whois($site_alias) {
   if (drush_get_option('refresh', FALSE)) {
     // Check the local list of known aliases first.
     $site_spec = drush_sitealias_get_record($site_alias);
-    $site_spec_string = '$aliases["' . $site_spec['#name'] . '"] = ' . var_export($site_spec , TRUE) . ';' . PHP_EOL;
+    $site_spec_string = '$aliases["' . $site_spec['#name'] . '"] = ' . var_export($site_spec, TRUE) . ';' . PHP_EOL;
     if (!empty($site_spec)) {
       drush_log(dt('Local record of @site-alias found.', $strings), 'OK');
-      drush_print_r($site_spec_string);
     }
   }
-  #drush_log('Result was ' . $site_spec, 'info');
 
   if (empty($site_spec)) {
     if (!empty($master_spec)) {
@@ -190,7 +348,6 @@ function drush_get_whois($site_alias) {
       // This returns the site_alias snippet in the $lookup_results['output'];
       // Notably, it does not return an array of data?
       // Output is empty string on failure.
-      drush_print_r($lookup_results);
       if (!empty($lookup_results['output'])) {
         drush_log(dt('Retrieved site spec of @site-alias from @master-alias ok.', $strings), 'info');
         $site_spec_string = $lookup_results['output'];
@@ -211,7 +368,7 @@ function drush_get_whois($site_alias) {
     $overwrite = drush_get_option('refresh');
     drush_get_save_alias($site_alias, $site_spec_string, $overwrite);
   }
-
+print_r($site_spec_string);
   return $site_spec;
 }
 
@@ -220,7 +377,7 @@ function drush_get_whois($site_alias) {
  *
  * @param string $site_alias
  *   Site identifier.
- * @param string $site_spec
+ * @param string $site_spec_string
  *   PHP config file snippet.
  * @param bool $overwrite
  *   Whether to overwrite an existing file found there.
@@ -236,7 +393,7 @@ function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE
   // OK, if you gave me a site_spec array, I can deal with that also.
   // Cast it to a config string on the fly here.
   if (is_array($site_spec_string) && !empty($site_spec_string['#name'])) {
-    $site_spec_string = '$aliases["' . $site_spec_string['#name'] . '"] = ' . var_export($site_spec_string , TRUE) . ';' . PHP_EOL;
+    $site_spec_string = '$aliases["' . $site_spec_string['#name'] . '"] = ' . var_export($site_spec_string, TRUE) . ';' . PHP_EOL;
   }
 
 
@@ -254,7 +411,7 @@ function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE
   }
 
   // Prepare and save that info locally.
-  $file_contents = '<' . '?' . 'php' . PHP_EOL . $site_spec_string;
+  $file_contents = '<?php' . PHP_EOL . $site_spec_string;
   $success = file_put_contents($alias_filepath, $file_contents);
 
   if (!$success) {
@@ -293,12 +450,25 @@ function drush_get_site() {
     drush_log(dt('No site given', $strings), 'warning');
     return NULL;
   }
+  /*
+  if (!$alias = drush_get_context('DRUSH_TARGET_SITE_ALIAS')) {
+    return drush_set_error('DRUSH_MISSING_TARGET_ALIAS', 'A remote site alias is required.');
+  }
+  */
 
-  foreach ($site_list as $site_id) {
-    $strings['%site_id'] = $site_id;
-    drush_log("Attempting to fetch %site_id", $strings);
+  foreach ($site_list as $site_alias) {
+    $strings['@site-alias'] = $site_alias;
+    drush_log(dt("Attempting to fetch @site_alias", $strings), 'info');
     // $site_id will be the @site.alias .
-    $source_site = drush_sitealias_get_record($site_id);
+    $source_site_spec = drush_sitealias_get_record($site_alias);
+    if (empty($source_site_spec)) {
+      drush_log(dt('Could not find a site-alias entry for @site-alias . Check the ID, or try "drush get-whois -v @site-alias" for more details.', $strings), 'error');
+      continue;
+    }
+    $strings['@root'] = $source_site_spec['root'];
+    $strings['@remote-host'] = $source_site_spec['remote-host'];
+    drush_log(dt('Info retrieved describing @site-alias. It is in @root on @remote-host .', $strings), 'error');
+    print_r($source_site_spec);
   }
 
 }

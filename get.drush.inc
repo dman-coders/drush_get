@@ -112,9 +112,14 @@ function get_drush_command() {
  *
  * Self-test and report.
  *
- * Ensures the expected master-alias site is available.
+ * Ensures:
+ * - your local paths are appropriate
+ * - your connection to your local db is configured
+ * - the expected master-alias site is available.
  */
 function drush_get_setup() {
+  drush_log(dt("About to review your local setup. This will probe your local storage path for projects, your access to your own database, connections to your remote list of projects, and the status there.", array()), 'info');
+
   $out = array();
   $master_alias = drush_get_option('master-alias', '');
   $strings['@master-alias'] = $master_alias;
@@ -133,15 +138,49 @@ function drush_get_setup() {
   drush_log(dt("Your generic docroot pattern is @get-docroot-pattern . This can be adjusted in your own drushrc.php, see 'drush topic get' for more.", $strings), 'success');
   drush_log(dt("Locally copied sites will be saved in paths such as @local_root .", $strings), 'success');
 
+
   // Admin database-superuser login is needed.
-  $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name:%random@localhost:3303/%short-name');
-  $db_su = drush_get_option('db-su', 'sqladmin');
+  $db_su = drush_get_option('db-su', 'root');
+  // You should set db_pattern in your own drushrc.php
+  // Acquia dev desktop uses port 3306 or 3307 and uses drupaluser.
+  $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name:%random@localhost:3306/%short-name');
   $local_db = drush_get_process_tokens($get_db_pattern, $sampleproject);
   $strings['@db-su'] = $db_su;
   $strings['@get-db-pattern'] = $get_db_pattern;
   $strings['@local_db'] = $local_db;
   drush_log(dt("Your generic database connection pattern is @get-db-pattern and your database admin user is @db-su . This can be adjusted in your own drushrc.php, see 'drush topic get' for more.", $strings), 'success');
   drush_log(dt("Locally copied sites will be stored in the database identified like @local_db .", $strings), 'success');
+
+  // Expected configs used and process should be as much like
+  // drush_core_site_install()
+  // as possible.
+  // $db_spec is a d7 style db info array.
+  $db_spec = drush_convert_db_from_db_url($local_db);
+  drush_log(dt("Testing to see if we have permissions to make a database.", $strings), 'success');
+
+  // This is the API call we should use later, so test it directly now.
+  $success = drush_sql_empty_db($db_spec);
+  // ^ this does NOT return success at all.
+  // The test is if we can use the new credentials to create a table;
+  // Try that now.
+  $sql[] = sprintf('DROP TABLE IF EXISTS %s;', 'deleteme');
+  $sql[] = sprintf('CREATE TABLE %s (id INT) ;', 'deleteme');
+  $success = _drush_sql_query($sql, $db_spec);
+
+  if ($success) {
+    drush_log(dt("Looked like we could add a database and grant permissions on it and work on it.", $strings), 'success');
+  }
+  else {
+    drush_log(dt("Looked like we failed to connect, create db, or grant permissions on a database as admin user '@db-su' trying to connect to, create and modify @local_db .", $strings), 'error');
+    drush_log(dt("Check the values of 'db-su', 'db-su-pw' and 'get-db-pattern' in your drushrc.php or equivalent.", $strings), 'error');
+    return FALSE;
+  }
+  // Clean up.
+  drush_log(dt("Removing test database.", $strings), 'debug');
+  $su_db_spec = drush_sql_su($db_spec);
+  $sql = array();
+  $sql[] = sprintf('DROP DATABASE IF EXISTS %s;', $db_spec['database']);
+  _drush_sql_query($sql, $su_db_spec);
 
 
 
@@ -168,7 +207,7 @@ function drush_get_setup() {
       drush_log(dt("master-alias is to be found at @remote-user@@remote-host", $strings), 'info');
 
       // Test connection to master-alias.
-      drush_print(dt('Checking connection to "@remote-host" and drush version there.', $strings));
+      drush_print(dt('Checking connection to "@remote-host" and the drush version there.', $strings));
 
       $commandline_options = array();
       // I wanted to avoid a timeout here, as this is just a probe,

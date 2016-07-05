@@ -9,6 +9,8 @@
  * Designed for teams working on many disparite sites at once to collaborate
  * quicker and use local dev environments (eg acquia dev desktop) more
  * efficiently..
+ *
+ * Requires Drush 7+
  */
 
 /**
@@ -156,16 +158,34 @@ function drush_get_setup() {
   // as possible.
   // $db_spec is a d7 style db info array.
   $db_spec = drush_convert_db_from_db_url($local_db);
-  drush_log(dt("Testing to see if we have permissions to make a database.", $strings), 'success');
 
+  drush_log(dt("Testing to see if we have permissions to make a database.", $strings), 'success');
   // This is the API call we should use later, so test it directly now.
-  $success = drush_sql_empty_db($db_spec);
-  // ^ this does NOT return success at all.
+  // $success = drush_sql_empty_db($db_spec);
+  drush_log(dt('Testing our DB spec has appropriate access.'), 'ok');
+  /**
+   * @var $sql \Drush\Sql\SqlBase
+   */
+  $sql = drush_sql_get_class($db_spec);
+  try {
+    $sql->drop_or_create();
+  }
+  catch (Error $e) {
+    return drush_set_error(dt('Failed to create database: @error', array('@error' => $e->getMessage())));
+  }
+
+  drush_log(dt('Looks like we had the ability to make databases.'), 'ok');
+
   // The test is if we can use the new credentials to create a table;
   // Try that now.
-  $sql[] = sprintf('DROP TABLE IF EXISTS %s;', 'deleteme');
-  $sql[] = sprintf('CREATE TABLE %s (id INT) ;', 'deleteme');
-  $success = _drush_sql_query($sql, $db_spec);
+  $success = FALSE;
+  try {
+    $success = $sql->query(sprintf('DROP TABLE IF EXISTS %s;', 'deleteme'));
+    $success &= $sql->query(sprintf('CREATE TABLE %s (id INT);', 'deleteme'));
+  }
+  catch (Error $e) {
+    return drush_set_error(dt('Failed to create table in database: @error', array('@error' => $e->getMessage())));
+  }
 
   if ($success) {
     drush_log(dt("Looked like we could add a database and grant permissions on it and work on it.", $strings), 'success');
@@ -177,13 +197,13 @@ function drush_get_setup() {
   }
   // Clean up.
   drush_log(dt("Removing test database.", $strings), 'debug');
-  $su_db_spec = drush_sql_su($db_spec);
-  $sql = array();
-  $sql[] = sprintf('DROP DATABASE IF EXISTS %s;', $db_spec['database']);
-  _drush_sql_query($sql, $su_db_spec);
+  $sql->su();
+  $sql->query(sprintf('DROP DATABASE IF EXISTS %s;', $db_spec['database']));
+
+  drush_log(dt("Local Database info and access seems fine.", $strings), 'ok');
 
 
-
+  drush_log(dt("Now checking master-alias for upstream info about sites.", $strings));
   if (empty($master_alias)) {
     drush_log("No master-alias is set", 'warning');
     drush_print("You should define your default master-alias option in your drushrc.php");

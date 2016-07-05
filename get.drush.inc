@@ -65,6 +65,18 @@ function get_drush_command() {
         'description' => dt('Where to save retrieved sitealias records. If not set, will use the first configured "alias-path" found in your .drushrc.php file, or "~/.drush" if not defined.'),
       ),
     ),
+    // Duplicate the site-alias output settings if I can.
+    'outputformat' => array(
+      'default' => 'config',
+      'pipe-format' => 'var_export',
+      'variable-name' => 'aliases',
+      'hide-empty-fields' => TRUE,
+      'private-fields' => 'password',
+      'field-labels' => array('#name' => 'Name', 'root' => 'Root', 'uri' => 'URI', 'remote-host' => 'Host', 'remote-user' => 'User', 'remote-port' => 'Port', 'os' => 'OS', 'ssh-options' => 'SSH options', 'php' => 'PHP'),
+      'fields-default' => array('#name', 'root', 'uri', 'remote-host', 'remote-user'),
+      'field-mappings' => array('name' => '#name'),
+      'output-data-type' => 'format-table',
+    ),
     'required-arguments' => 1,
     'examples' => array(
       'drush get-whois @mysite.multisitehost.org' => 'Returns the site-alias for the named site (by performing a remote lookup request if needed).',
@@ -370,46 +382,52 @@ function _drush_get_random($length = 10) {
  *
  * If the named site alias is unknown, query the master-alias site for it.
  *
- * Optionally store the info locally.
+ * Optionally store the info locally, if a local site-alias file
+ * does not already exist..
  *
  * @param string $site_alias
- *   Site identifier.
+ *   Site identifier. eg @www.example.com.
  *
  * @return array
- *   site-alias
+ *   site-alias specification array. Similar format to drush site-alias command.
  */
 function drush_get_whois($site_alias) {
   // nb.
   // _alias is the string identifier,
   // _spec is the array that it represents.
-  // _string is the text version of that that the remote call may give us.
+  // _string is the text version of that array that the remote call may give us.
   $strings = array(
     '@site-alias' => $site_alias,
   );
-  $master_alias = drush_get_option('master-alias', '');
-  $strings['@master-alias'] = $master_alias;
-  $master_spec = drush_sitealias_get_record($master_alias);
+  $site_spec = NULL;
+  $site_name = ltrim($site_alias, '@');
 
   if (drush_get_option('refresh', FALSE)) {
     // Check the local list of known aliases first.
     $site_spec = drush_sitealias_get_record($site_alias);
-    $site_spec_string = '$aliases["' . $site_spec['#name'] . '"] = ' . var_export($site_spec, TRUE) . ';' . PHP_EOL;
     if (!empty($site_spec)) {
-      drush_log(dt('Local record of @site-alias found.', $strings), 'OK');
+      drush_log(dt('Local record of @site-alias found.', $strings), 'ok');
     }
   }
 
   if (empty($site_spec)) {
+    $master_alias = drush_get_option('master-alias', '');
+    $strings['@master-alias'] = $master_alias;
+    $master_spec = drush_sitealias_get_record($master_alias);
     if (!empty($master_spec)) {
       // Query the master-alias for this info.
       drush_log(dt('Asking @master-alias if it knows about @site-alias', $strings), 'info');
       $lookup_results = drush_invoke_process($master_alias, 'site-alias', array($site_alias), array('format' => 'config'), FALSE);
       // This returns the site_alias snippet in the $lookup_results['output'];
-      // Notably, it does not return an array of data?
+      // Notably, it does not return an array of data? Just a string for me.
       // Output is empty string on failure.
       if (!empty($lookup_results['output'])) {
         drush_log(dt('Retrieved site spec of @site-alias from @master-alias ok.', $strings), 'info');
         $site_spec_string = $lookup_results['output'];
+        // I gotta eval it to get the data out again.
+        $aliases = array();
+        eval($site_spec_string);
+        $site_spec = $aliases[$site_name];
       }
     }
     else {
@@ -424,11 +442,34 @@ function drush_get_whois($site_alias) {
 
   // Optionally save that config locally for next time.
   if (drush_get_option('save', '')) {
+    // Build the PHP string.
+    $aliases[$site_name] = $site_spec;
+    $site_spec_string = var_export($aliases, TRUE) . ';' . PHP_EOL;
+
     $overwrite = drush_get_option('refresh');
-    drush_get_save_alias($site_alias, $site_spec_string, $overwrite);
+    $saved = drush_get_save_alias($site_alias, $site_spec_string, $overwrite);
+    if (!$saved) {
+      drush_log(dt('Did not save the site-alias to the expected site-alias directory.', $strings), 'error');
+    }
+
+    /*
+    // Maybe we could eval that string now,
+    // But instead - use our own API to read back in the site spec
+    // that we just wrote.
+    $strings['%alias_directory'] = dirname($saved);
+    // It should resolve now.
+    $site_spec = drush_sitealias_get_record($site_alias);
+    if (empty($site_spec)) {
+      drush_log(dt('Failed to read the site specification (@site-alias) that I thought I just saved. Could be that we are configured to save site-aliases into a directory that we are not configured to read from. That is probably no help. Ensure that the directory %alias_directory is configured to be in your drush site-alias search paths.', $strings), 'error');
+    }
+    */
   }
-print_r($site_spec_string);
-  return $site_spec;
+  if ($site_spec) {
+    return array($site_name => $site_spec);
+  }
+  else {
+    return NULL;
+  }
 }
 
 /**
@@ -441,8 +482,8 @@ print_r($site_spec_string);
  * @param bool $overwrite
  *   Whether to overwrite an existing file found there.
  *
- * @return bool
- *   Success.
+ * @return bool|string
+ *   The successfully saved filepath. FALSE on failure.
  */
 function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE) {
   if (empty($site_alias) || empty($site_alias)) {
@@ -454,7 +495,6 @@ function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE
   if (is_array($site_spec_string) && !empty($site_spec_string['#name'])) {
     $site_spec_string = '$aliases["' . $site_spec_string['#name'] . '"] = ' . var_export($site_spec_string, TRUE) . ';' . PHP_EOL;
   }
-
 
   $alias_path = drush_get_option('alias-path', '');
   if (is_array($alias_path)) {
@@ -487,12 +527,12 @@ function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE
   if ($ret !== 0) {
     drush_log(dt('Syntax check on the site-alias config code failed. This is unexpected and indicates a problem with the data supplied from upstream. Run this command with --debug on for clues.', $strings), 'error');
     drush_log(dt('Removing the broken @alias-filepath code file for now.', $strings), 'warning');
-    #unlink($alias_filepath);
+    unlink($alias_filepath);
     return FALSE;
   }
 
-  drush_log(dt('Saved the alias info to @alias-filepath', $strings), 'OK');
-  return TRUE;
+  drush_log(dt('Saved the alias info to @alias-filepath', $strings), 'ok');
+  return $alias_filepath;
 }
 
 /**

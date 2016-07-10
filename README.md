@@ -192,3 +192,31 @@ For convenience, the *known* drupal site user files like `sites/default/files`
 will be excluded in the first download.
 Known Drupal user files
 
+## Running the mirror site
+
+After a successful get-site, You have the files and the database
+ready to rock. All that's needed is the webserver.
+It's usually NOT neccessary to have a running webserver if all you
+wanted the copy for was a snapshot or backup to do migrations from,
+but it's helpful to prove to yourself that things worked.
+
+You can choose to:
+* Set up the new platform and vhost yourself with Apache
+* Register it with Apache Dev Desktop or Aegir - if you use those.
+* Use the drush built-in mini web server, just for a test.
+
+#### runserver is the simplest
+
+I found a few quirks when using `drush run-server`, The ADD PHP,
+ and an old D6 site.
+*  I Needed to use Drupal6, not higher.
+*  The php-cgi path needed to be defined explicitly.
+*  The MySQL had to be connecting on 127.0.0.1, not localhost.
+
+````
+drush6 \
+  --root=/var/www/beehive/dev \
+  --uri=dev.beehive.local \
+  --php-cgi=/Applications/DevDesktop/php5_5/bin/php-cgi \
+  runserver
+````

@@ -136,28 +136,35 @@ function get_drush_command() {
  */
 function drush_get_setup() {
   drush_log(dt("About to review your local setup. This will probe your local storage path for projects, your access to your own database, connections to your remote list of projects, and the status there.", array()), 'info');
+  drush_log(dt("#### drush-get patterns ####"));
 
   $out = array();
   $master_alias = drush_get_option('master-alias', '');
   $strings['@master-alias'] = $master_alias;
 
   // Check local environment preferences.
-  // docroot is needed.
-  $get_docroot_pattern = drush_get_option('get-docroot-pattern', '/var/www/%short-name/%docroot-name');
-  $sampleproject = array(
+  $sampleproject_spec = array(
     'uri' => 'sampleproject.remotehost.demo',
     'name' => 'sampleproject',
     'role' => 'dev',
   );
-  $local_root = drush_get_process_tokens($get_docroot_pattern, $sampleproject);
+  $get_docroot_pattern = drush_get_option('get-docroot-pattern', '/var/www/%short-name/%docroot-name');
+  $local_root = drush_get_process_tokens($get_docroot_pattern, $sampleproject_spec);
   $strings['@get-docroot-pattern'] = $get_docroot_pattern;
   $strings['@local_root'] = $local_root;
-  drush_log(dt("Your generic docroot pattern is @get-docroot-pattern . This can be adjusted in your own drushrc.php, see 'drush topic get' for more.", $strings), 'ok');
-  drush_log(dt("Locally copied sites will be saved in paths such as \n  @local_root .", $strings), 'ok');
 
+  $get_uri_pattern = drush_get_option('get-uri-pattern', 'mirror.%short-name.localhost');
+  $local_uri = drush_get_process_tokens($get_uri_pattern, $sampleproject_spec);
+  $strings['@get-uri-pattern'] = $get_uri_pattern;
+  $strings['@local_uri'] = $local_uri;
+
+  drush_log(dt("Your generic 'get-docroot-pattern' is '@get-docroot-pattern' .", $strings), 'ok');
+  drush_log(dt("Your generic 'get-uri-pattern' is '@get-uri-pattern' .", $strings), 'ok');
+  drush_log(dt("Locally copied sites will be saved in paths such as \n  '@local_root' \nand URLS such as\n '@local_uri' .", $strings), 'ok');
 
   // Admin database-superuser login is needed.
   $db_su = drush_get_option('db-su');
+  $strings['@db-su'] = $db_su;
   if (!$db_su) {
     drush_log(dt("Unable to determine your database super-user. You must set the drush 'db-su' and 'db-su-pw' parameters in your drushrc.php or equivalent. See help for site-install .", $strings), 'error');
     return FALSE;
@@ -166,12 +173,13 @@ function drush_get_setup() {
   // You should set db_pattern in your own drushrc.php
   // Acquia dev desktop uses port 3306 or 3307 and uses drupaluser.
   $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name:%random@localhost:3306/%short-name');
-  $local_db = drush_get_process_tokens($get_db_pattern, $sampleproject);
-  $strings['@db-su'] = $db_su;
+  $local_db = drush_get_process_tokens($get_db_pattern, $sampleproject_spec);
   $strings['@get-db-pattern'] = $get_db_pattern;
   $strings['@local_db'] = $local_db;
-  drush_log(dt("Your generic database connection pattern is @get-db-pattern and your database admin user is @db-su . This can be adjusted in your own drushrc.php, see 'drush topic get' for more.", $strings), 'ok');
-  drush_log(dt("Locally copied sites will be stored in the database identified like\n  @local_db .", $strings), 'success');
+  drush_log(dt("Your generic database connection pattern 'get-db-pattern' is '@get-db-pattern' and your database admin user is '@db-su' .", $strings), 'ok');
+  drush_log(dt("Locally copied sites will be stored in the database identified like\n  '@local_db' .", $strings), 'ok');
+
+  drush_log(dt("These patterns can be adjusted in your own drushrc.php, see 'drush topic get' for more.", $strings), 'ok');
 
   // Expected configs used and process should be as much like
   // drush_core_site_install()
@@ -179,10 +187,7 @@ function drush_get_setup() {
   // $db_spec is a d7 style db info array.
   $db_spec = drush_convert_db_from_db_url($local_db);
 
-  drush_log(dt("Testing to see if we have permissions to make a database.", $strings), 'success');
-  // This is the API call we should use later, so test it directly now.
-  // $success = drush_sql_empty_db($db_spec);
-  drush_log(dt('Testing our DB spec has appropriate access.'), 'ok');
+  drush_log(dt("Testing to see if we have permissions to make a database using your configured db-su:db-su-pass (%db-su) credentials .", $strings), 'info');
   /**
    * @var $sql \Drush\Sql\SqlBase
    */
@@ -193,8 +198,9 @@ function drush_get_setup() {
   catch (Error $e) {
     return drush_set_error(dt('Failed to create database: @error', array('@error' => $e->getMessage())));
   }
-  drush_log(dt('Looks like we had the ability to make databases.'), 'ok');
+  drush_log(dt('Looks like we had the ability to make databases.'), 'success');
 
+  drush_log(dt("#### drush-get master ####", $strings), 'info');
   // Test if we can use the new credentials to create a table;
   // We are re-establishing a NEW $sql, as the previous $su_sql had its
   // privileges elevated.
@@ -223,9 +229,9 @@ function drush_get_setup() {
   // Unimplimented? $su_sql->delete();
   $su_sql->query(sprintf('DROP DATABASE IF EXISTS %s;', $db_spec['database']));
 
-  drush_log(dt("Local Database info and access seems fine.", $strings), 'ok');
+  drush_log(dt("Local Database info and access seems fine.", $strings), 'success');
 
-  drush_log(dt("Now checking master-alias @master-alias for upstream info about sites.", $strings));
+  drush_log(dt("Now checking master-alias @master-alias for upstream info about sites.", $strings), 'notice');
   if (empty($master_alias)) {
     drush_log("No master-alias is set", 'warning');
     drush_print("You should define your default master-alias option in your drushrc.php");
@@ -234,7 +240,7 @@ function drush_get_setup() {
     drush_print("See 'drush docs-get' topic for more.");
   }
   else {
-    drush_log(dt("master-alias is @master-alias", $strings), 'info');
+    drush_log(dt("master-alias is @master-alias", $strings), 'ok');
     $out['master-alias'] = $master_alias;
     // Test the listed master-alias is known.
     $master_spec = drush_sitealias_get_record($master_alias);
@@ -246,10 +252,10 @@ function drush_get_setup() {
     else {
       $strings['@remote-host'] = $master_spec['remote-host'];
       $strings['@remote-user'] = $master_spec['remote-user'];
-      drush_log(dt("master-alias is to be found at @remote-user@@remote-host", $strings), 'info');
+      drush_log(dt("master-alias is to be found at @remote-user@@remote-host", $strings), 'ok');
 
       // Test connection to master-alias.
-      drush_print(dt('Checking connection to remote-host:"@remote-host" and the drush version there.', $strings));
+      drush_log(dt('Checking connection to remote-host:"@remote-host" and the drush version there.', $strings), 'info');
 
       $commandline_options = array();
       // I wanted to avoid a timeout here, as this is just a probe,
@@ -272,7 +278,7 @@ function drush_get_setup() {
       // Just want the major really.
       $remote_drush_version = floatval($lookup_results['output']);
       $strings['@remote_drush_version'] = $lookup_results['output'];
-      drush_log(dt('Remote connection succeded and drush version on "@remote-host" was reported as @remote_drush_version.', $strings), 'success');
+      drush_log(dt('Remote connection succeeded and drush version on "@remote-host" was reported as @remote_drush_version.', $strings), 'success');
 
       // Boring. The way data was returned is different between drush 5 & 6.
       $drush_bootstrap_key = 'bootstrap';
@@ -282,7 +288,7 @@ function drush_get_setup() {
       }
 
 
-      drush_print(dt('Checking availability and status of master-alias site @master-alias', $strings));
+      drush_log(dt('Checking availability and status of master-alias site @master-alias', $strings), 'info');
       $lookup_results = drush_invoke_process($master_alias, 'status', $commandline_options, array(), FALSE);
       // $lookup_results['output'] = "raw text"
       // $lookup_results['object'] = array() # Array version of that.
@@ -323,22 +329,22 @@ function drush_get_setup() {
  *
  * @param string $pattern
  *   Pattern for deriving the project path using substitutions.
- * @param array $site_alias
- *   A site alias containing a number of keys that could be useful as
- *   substititions.
+ * @param array $site_spec
+ *   A site alias specification
+ *   containing a number of keys that could be useful as substititions.
  *
  * @return string
  *   The processed result.
  */
-function drush_get_process_tokens($pattern, $site_alias) {
+function drush_get_process_tokens($pattern, $site_spec) {
   $strings = array();
   // Copy all strings and paths as substitute tokens.
-  foreach ($site_alias as $key => $value) {
+  foreach ($site_spec as $key => $value) {
     if (is_string($value)) {
       $strings['%' . $key] = $value;
     }
   }
-  $strings += (array) $site_alias['path-aliases'];
+  $strings += @(array)$site_spec['path-aliases'];
 
   if (!isset($strings['%short-name'])) {
     if (isset($strings['%name'])) {
@@ -352,7 +358,7 @@ function drush_get_process_tokens($pattern, $site_alias) {
   $strings['%short-name'] = preg_replace('/[^a-z0-9]+/', '-', strtolower($strings['%short-name']));
 
   // safe-uri can be used for longer slugs
-  // - Good for a database name if shortname reserved.
+  // - Good for a database name if shortname is reserved.
   $strings['%safe-uri'] = preg_replace('/[^a-z0-9]+/', '_', strtolower($strings['%uri']));
 
   if (!isset($strings['%docroot-name'])) {
@@ -365,7 +371,6 @@ function drush_get_process_tokens($pattern, $site_alias) {
   }
 
   $strings['%random'] = _drush_get_random();
-
   return strtr($pattern, $strings);
 }
 
@@ -576,7 +581,7 @@ function drush_get_site() {
     $strings['@root'] = $source_site_spec['root'];
     $strings['@remote-host'] = $source_site_spec['remote-host'];
     drush_log(dt('Info retrieved describing @source_site_alias. It is in @root on @remote-host .', $strings), 'success');
-    print_r($source_site_spec);
+
     // So far so good.
     // Now to do :
     // * Local platform setup, using the get_setup preferences.
@@ -592,19 +597,24 @@ function drush_get_site() {
     }
     $short_name = array_shift($name_parts);
     $strings['@short_name'] = $short_name;
+
     // Derive the local dev site definition.
-    $local_uri = 'dev.' . $short_name . '.local';
-    $strings['@local_uri'] = $local_uri;
     $local_site_spec = array(
-      'uri' => $local_uri,
       'name' => $short_name,
       'role' => 'dev',
       'path-aliases' => array(),
     );
+
+    $get_uri_pattern = drush_get_option('get-uri-pattern', 'mirror.%short-name.localhost');
+    $local_uri = drush_get_process_tokens($get_uri_pattern, $local_site_spec);
+    $local_site_spec['uri'] = $local_uri;
+    $strings['@local_uri'] = $local_uri;
+
     $get_docroot_pattern = drush_get_option('get-docroot-pattern', '/var/www/%short-name/%docroot-name');
     $local_root = drush_get_process_tokens($get_docroot_pattern, $local_site_spec);
     $local_site_spec['root'] = $local_root;
     $strings['@local_root'] = $local_root;
+
     // A path-based local_root_alias is enough to start doing other processes.
     $local_site_alias = "$local_root#$local_uri";
     $strings['@local_site_alias'] = $local_site_alias;
@@ -617,20 +627,38 @@ function drush_get_site() {
       $local_site_alias,
     );
     $rsync_options = array(
+      // Recent version of drush stopped assuming yes when dispatching
+      // and defaulted to no??
+
       # If I define exclude-paths here,
       # it seems to override the site-alias ones.
       #  '--exclude-paths=%files'
+
       // In order to speed up bootstrapping, exclude sites folders during
       // this phase of mirroring.
-      '--exclude-sites'
+      // Hm, but this leaves behind 'default'
+      // and hence default/default.settings.php
+      // hence cannot run site-install.
+      // '--exclude-sites'
     );
 
     drush_log(dt("About to rsync ALL FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already bee excluded via the source sites site-alias settings.", $strings), 'ok');
+    if (!drush_mkdir($local_root, TRUE)) {
+      drush_log(dt("Could not prepare local root directory @local_root to copy into. Probably permissions. Aborting", $strings), 'error');
+      continue;
+    }
     $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options);
-    if ($rsynced_success) {
+    if ($rsynced_success && !$rsynced_success['error_status']) {
+      // TODO - more checking - seems possible to get a success flagged,
+      // but no actual files. Do you really want to continue? (y/n): Cancelled.
       drush_log(dt("Completed rsync site files from @source_site_alias to @local_site_alias. We now have a platform to build on.", $strings), 'success');
     }
     else {
+      if ($rsynced_success['error_status']) {
+        foreach($rsynced_success['error_log'] as $log) {
+          drush_log($log, 'error');
+        }
+      }
       drush_log(dt("Failed to rsync site files from @source_site_alias to @local_site_alias. This feels like a problem, so exiting", $strings), 'error');
       continue;
     }
@@ -667,6 +695,7 @@ function drush_get_site() {
       drush_log(dt("Site Install seems to have failed.", $strings), 'error');
       $strings['@command'] = "drush $local_site_alias site-install " . implode(' ', $site_install_args) . ' ' . implode(' ', $site_install_options);
       drush_log(dt("You'll have to investigate why a command like\n  command\n failed.", $strings), 'error');
+      drush_log(dt("Depending where site-insatll failed, you should probably DROP the %local_db database before trying again.", $strings), 'error');
       continue;
     }
 
@@ -686,7 +715,7 @@ function drush_get_site() {
       drush_log(dt("Failed to sql-sync site DB from @source_site_alias to @local_site_alias. This feels like a problem, so exiting", $strings), 'error');
       continue;
     }
-    
+
 
   }
 

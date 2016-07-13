@@ -146,14 +146,14 @@ function drush_get_setup() {
   $sampleproject_spec = array(
     'uri' => 'sampleproject.remotehost.demo',
     'name' => 'sampleproject',
-    'role' => 'dev',
+    'role' => 'mirror',
   );
   $get_docroot_pattern = drush_get_option('get-docroot-pattern', '/var/www/%short-name/%docroot-name');
   $local_root = drush_get_process_tokens($get_docroot_pattern, $sampleproject_spec);
   $strings['@get-docroot-pattern'] = $get_docroot_pattern;
   $strings['@local_root'] = $local_root;
 
-  $get_uri_pattern = drush_get_option('get-uri-pattern', 'mirror.%short-name.localhost');
+  $get_uri_pattern = drush_get_option('get-uri-pattern', '%role.%short-name.localhost');
   $local_uri = drush_get_process_tokens($get_uri_pattern, $sampleproject_spec);
   $strings['@get-uri-pattern'] = $get_uri_pattern;
   $strings['@local_uri'] = $local_uri;
@@ -323,8 +323,9 @@ function drush_get_setup() {
 }
 
 /**
- * Calculate the appropriate storage path for a local project.
+ * Calculate the appropriate tokenized strings for a local project.
  *
+ * Used to generate uris, paths, identifiers and things.
  * See the README.md topic on available tokens.
  *
  * @param string $pattern
@@ -601,11 +602,11 @@ function drush_get_site() {
     // Derive the local dev site definition.
     $local_site_spec = array(
       'name' => $short_name,
-      'role' => 'dev',
+      'role' => 'mirror',
       'path-aliases' => array(),
     );
 
-    $get_uri_pattern = drush_get_option('get-uri-pattern', 'mirror.%short-name.localhost');
+    $get_uri_pattern = drush_get_option('get-uri-pattern', '%role.%short-name.localhost');
     $local_uri = drush_get_process_tokens($get_uri_pattern, $local_site_spec);
     $local_site_spec['uri'] = $local_uri;
     $strings['@local_uri'] = $local_uri;
@@ -616,7 +617,9 @@ function drush_get_site() {
     $strings['@local_root'] = $local_root;
 
     // A path-based local_root_alias is enough to start doing other processes.
-    $local_site_alias = "$local_root#$local_uri";
+    // Wierdness happens if this is slightly off
+    // - that slash hash makes a huge difference in whether rsync works!
+    $local_site_alias = "$local_root/#$local_uri";
     $strings['@local_site_alias'] = $local_site_alias;
     drush_log(dt("Your generic project will be short_name @short_name.", $strings), 'ok');
     drush_log(dt("Locally copied site @local_uri will be deployed into @local_root .", $strings), 'ok');
@@ -641,8 +644,9 @@ function drush_get_site() {
       // hence cannot run site-install.
       // '--exclude-sites'
     );
+    drush_set_context(DRUSH_AFFIRMATIVE, TRUE);
 
-    drush_log(dt("About to rsync ALL FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already bee excluded via the source sites site-alias settings.", $strings), 'ok');
+    drush_log(dt("About to rsync ALL FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already been excluded via the source sites site-alias settings.", $strings), 'ok');
     if (!drush_mkdir($local_root, TRUE)) {
       drush_log(dt("Could not prepare local root directory @local_root to copy into. Probably permissions. Aborting", $strings), 'error');
       continue;

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * @file
  * Utility for quick mirroring of sites to local dev environments.
@@ -209,7 +210,7 @@ function drush_get_setup() {
   $sql = drush_sql_get_class($db_spec);
   $success = FALSE;
   try {
-    // $sql->query(sprintf('DROP TABLE IF EXISTS %s;', 'deleteme'));
+    // $sql->query(sprintf('DROP TABLE IF EXISTS %s;', 'deleteme'));.
     $success = $sql->query(sprintf('CREATE TABLE %s (id INT);', 'deleteme'));
   }
   catch (Error $e) {
@@ -287,7 +288,6 @@ function drush_get_setup() {
         $drush_bootstrap_key = 'Drupal bootstrap';
       }
 
-
       drush_log(dt('Checking availability and status of master-alias site @master-alias', $strings), 'info');
       $lookup_results = drush_invoke_process($master_alias, 'status', $commandline_options, array(), FALSE);
       // $lookup_results['output'] = "raw text"
@@ -299,12 +299,11 @@ function drush_get_setup() {
       // = array(DRUPAL_USER_LOGIN_FAILED
       // =>  "Could not login with user account `1'.");
       // .
-
       $bootstrap = $lookup_results['object'][$drush_bootstrap_key];
 
       if ($bootstrap == 'Successful') {
         drush_log(dt('Connection to master-alias @master-alias and Drupal bootstrap and status check succeeded.', $strings), 'success');
-        //print_r($lookup_results['object']);
+        // print_r($lookup_results['object']);.
         if ($remote_drush_version >= 6) {
           $strings['@remote_alias_count'] = count($lookup_results['object']['drush-alias-files']);
           drush_log(dt('Remote master-alias knows about @remote_alias_count alias files over there.', $strings), 'info');
@@ -345,7 +344,7 @@ function drush_get_process_tokens($pattern, $site_spec) {
       $strings['%' . $key] = $value;
     }
   }
-  $strings += @(array)$site_spec['path-aliases'];
+  $strings += @(array) $site_spec['path-aliases'];
 
   if (!isset($strings['%short-name'])) {
     if (isset($strings['%name'])) {
@@ -382,7 +381,7 @@ function drush_get_process_tokens($pattern, $site_spec) {
  * as duplicated by provision.inc also.
  *
  * @see user_password()
-*/
+ */
 function _drush_get_random($length = 10) {
   $allowable_characters = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   $len = strlen($allowable_characters) - 1;
@@ -392,7 +391,6 @@ function _drush_get_random($length = 10) {
   }
   return $pass;
 }
-
 
 /**
  * Execute `drush get-whois` command.
@@ -480,9 +478,9 @@ function drush_get_whois($site_alias) {
     // It should resolve now.
     $site_spec = drush_sitealias_get_record($site_alias);
     if (empty($site_spec)) {
-      drush_log(dt('Failed to read the site specification (@site-alias) that I thought I just saved. Could be that we are configured to save site-aliases into a directory that we are not configured to read from. That is probably no help. Ensure that the directory %alias_directory is configured to be in your drush site-alias search paths.', $strings), 'error');
+    drush_log(dt('Failed to read the site specification (@site-alias) that I thought I just saved. Could be that we are configured to save site-aliases into a directory that we are not configured to read from. That is probably no help. Ensure that the directory %alias_directory is configured to be in your drush site-alias search paths.', $strings), 'error');
     }
-    */
+     */
   }
   if ($site_spec) {
     return array($site_name => $site_spec);
@@ -589,7 +587,6 @@ function drush_get_site() {
     // * A file-copy down
     // * Database sync down
     // * Local status check.
-
     // Build the local site site spec, derived from the remote one.
     // Guess a good shortname/slug.
     $name_parts = explode('.', $source_site_spec['#name']);
@@ -630,15 +627,13 @@ function drush_get_site() {
       $local_site_alias,
     );
     $rsync_options = array(
-      # If I define exclude-paths here,
-      # it seems to override the site-alias ones.
-      #  '--exclude-paths=backup_migrate'
-
+      // If I define exclude-paths here,
+      // it seems to override the site-alias ones.
+      // '--exclude-paths=backup_migrate'.
       // In order to speed up bootstrapping, exclude files folders during
       // this phase of mirroring.
       '--exclude-files',
-      // '--exclude-sites'
-
+      // '--exclude-sites'.
     );
 
     drush_log(dt("About to rsync ALL FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already been excluded via the source sites site-alias settings.", $strings), 'ok');
@@ -652,7 +647,7 @@ function drush_get_site() {
     // I traced it for a day, but it's hairy.
     // The default backend_options...
     $backend_options = TRUE;
-    // mean that things get skipped unless we
+    // Mean that things get skipped unless we
     // either force a yes,
     // (first Save the current state:)
     // $affirmative = drush_get_context(DRUSH_AFFIRMATIVE);
@@ -661,10 +656,9 @@ function drush_get_site() {
     $backend_options = array('interactive' => TRUE);
     // HOWEVER, interactive sometimes fails to register what's happening
     // over a tunnel (dunno why)
-
     // Run the proc.
     $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
-print_r($rsynced_success);
+    print_r($rsynced_success);
     if ($rsynced_success && !$rsynced_success['error_status']) {
       // TODO - more checking - seems possible to get a success flagged,
       // but no actual files. Do you really want to continue? (y/n): Cancelled.
@@ -672,10 +666,11 @@ print_r($rsynced_success);
     }
     else {
       if ($rsynced_success['error_status']) {
-        foreach($rsynced_success['error_log'] as $log) {
+        foreach ($rsynced_success['error_log'] as $log) {
           drush_log($log, 'error');
         }
-      } else {
+      }
+      else {
         drush_log(dt("Rsync result was FALSE, yet no error status reported. This may happen when tunneling or other things are happening..", $strings), 'error');
       }
       drush_log(dt("Failed to rsync site files from @source_site_alias to @local_site_alias. Aborting", $strings), 'error');
@@ -687,18 +682,16 @@ print_r($rsynced_success);
     $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name:%random@localhost:3306/%short-name');
     $local_db = drush_get_process_tokens($get_db_pattern, $local_site_spec);
 
-    $site_install_args = array(
-    );
+    $site_install_args = array();
     $site_install_options = array(
       "--db-url=$local_db",
       "--sites-subdir=$local_uri",
     );
-    
+
     // When running drush_invoke_process, we may find ourselves running
     // a totally different version of drush!
     // Site instances may have a local drush - of a difference version even.
     // That forks into a cli process and everything.
-
     // I actually do NOT want the full site-install,
     // But it's hella easier that just trying to invoke just the needed
     // database creation part of it.
@@ -723,8 +716,7 @@ print_r($rsynced_success);
       $source_site_alias,
       $local_site_alias,
     );
-    $sql_sync_options = array(
-    );
+    $sql_sync_options = array();
     drush_log(dt("About to sync the remote database down. This usually takes time.", $strings), 'ok');
     $sql_synced_success = drush_invoke_process('@self', 'sql-sync', $sql_sync_args, $sql_sync_options, $backend_options);
     print_r($sql_synced_success);
@@ -742,7 +734,7 @@ print_r($rsynced_success);
     drush_print(dt("#########"));
     drush_print(dt("You can probably run the site now, by invoking: \n  drush @local_site_alias runserver", $strings));
     drush_print(dt("#########"));
-    if(drush_confirm('Do you want to run the server now?')) {
+    if (drush_confirm('Do you want to run the server now?')) {
       $runserver_success = drush_invoke_process($local_site_alias, 'runserver');
     }
 

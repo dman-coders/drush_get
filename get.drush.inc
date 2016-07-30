@@ -752,7 +752,7 @@ function drush_get_site() {
     // As a developer shortcut, note the site identifier as a text file
     // in the project root.
     // We can use this to avoid too much typing or remembering things.
-    $shorthand_filepath = dirname($local_root) . DIRECTORY_SEPARATOR . $local_site_spec['role'];
+    $shorthand_filepath = dirname($local_root) . DIRECTORY_SEPARATOR . $local_site_spec['role'] . '.txt';
     if (is_writable($shorthand_filepath)) {
       file_put_contents($shorthand_filepath, $local_site_alias);
     }

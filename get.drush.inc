@@ -630,28 +630,41 @@ function drush_get_site() {
       $local_site_alias,
     );
     $rsync_options = array(
-      // Recent version of drush stopped assuming yes when dispatching
-      // and defaulted to no??
-
       # If I define exclude-paths here,
       # it seems to override the site-alias ones.
-      #  '--exclude-paths=%files'
+      #  '--exclude-paths=backup_migrate'
 
-      // In order to speed up bootstrapping, exclude sites folders during
+      // In order to speed up bootstrapping, exclude files folders during
       // this phase of mirroring.
-      // Hm, but this leaves behind 'default'
-      // and hence default/default.settings.php
-      // hence cannot run site-install.
+      '--exclude-files',
       // '--exclude-sites'
+
     );
-    drush_set_context(DRUSH_AFFIRMATIVE, TRUE);
 
     drush_log(dt("About to rsync ALL FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already been excluded via the source sites site-alias settings.", $strings), 'ok');
     if (!drush_mkdir($local_root, TRUE)) {
       drush_log(dt("Could not prepare local root directory @local_root to copy into. Probably permissions. Aborting", $strings), 'error');
       continue;
     }
-    $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options);
+
+    // Recent version of drush stopped assuming yes when dispatching
+    // and defaulted to no??
+    // I traced it for a day, but it's hairy.
+    // The default backend_options...
+    $backend_options = TRUE;
+    // mean that things get skipped unless we
+    // either force a yes,
+    // (first Save the current state:)
+    // $affirmative = drush_get_context(DRUSH_AFFIRMATIVE);
+    // drush_set_context(DRUSH_AFFIRMATIVE, TRUE);
+    // ..or leave it interactive.
+    $backend_options = array('interactive' => TRUE);
+    // HOWEVER, interactive sometimes fails to register what's happening
+    // over a tunnel (dunno why)
+
+    // Run the proc.
+    $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
+print_r($rsynced_success);
     if ($rsynced_success && !$rsynced_success['error_status']) {
       // TODO - more checking - seems possible to get a success flagged,
       // but no actual files. Do you really want to continue? (y/n): Cancelled.
@@ -662,8 +675,10 @@ function drush_get_site() {
         foreach($rsynced_success['error_log'] as $log) {
           drush_log($log, 'error');
         }
+      } else {
+        drush_log(dt("Rsync result was FALSE, yet no error status reported. This may happen when tunneling or other things are happening..", $strings), 'error');
       }
-      drush_log(dt("Failed to rsync site files from @source_site_alias to @local_site_alias. This feels like a problem, so exiting", $strings), 'error');
+      drush_log(dt("Failed to rsync site files from @source_site_alias to @local_site_alias. Aborting", $strings), 'error');
       continue;
     }
 
@@ -689,7 +704,7 @@ function drush_get_site() {
     // database creation part of it.
     // I really just wanted drush_core_pre_site_install().
     drush_log(dt("About to initialize the site directory and a new database.", $strings), 'ok');
-    $site_install_success = drush_invoke_process($local_site_alias, 'site-install', $site_install_args, $site_install_options);
+    $site_install_success = drush_invoke_process($local_site_alias, 'site-install', $site_install_args, $site_install_options, $backend_options);
 
     if ($site_install_success) {
       drush_log(dt("Site Install seems to have been a success.", $strings), 'success');
@@ -711,7 +726,8 @@ function drush_get_site() {
     $sql_sync_options = array(
     );
     drush_log(dt("About to sync the remote database down. This usually takes time.", $strings), 'ok');
-    $sql_synced_success = drush_invoke_process('@self', 'sql-sync', $sql_sync_args, $sql_sync_options);
+    $sql_synced_success = drush_invoke_process('@self', 'sql-sync', $sql_sync_args, $sql_sync_options, $backend_options);
+    print_r($sql_synced_success);
     if ($sql_synced_success) {
       drush_log(dt("Completed sql-sync site DB from @source_site_alias to @local_site_alias. We now have a ready-to-run site.", $strings), 'success');
     }
@@ -720,6 +736,15 @@ function drush_get_site() {
       continue;
     }
 
+    // Reset the yes/no state so it doesn't mess up other logic.
+    drush_set_context('DRUSH_AFFIRMATIVE', $affirmative);
+
+    drush_print(dt("#########"));
+    drush_print(dt("You can probably run the site now, by invoking: \n  drush @local_site_alias runserver", $strings));
+    drush_print(dt("#########"));
+    if(drush_confirm('Do you want to run the server now?')) {
+      $runserver_success = drush_invoke_process($local_site_alias, 'runserver');
+    }
 
   }
 

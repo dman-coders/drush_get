@@ -104,6 +104,10 @@ function get_drush_command() {
         'description' => dt('The git URL of the project. Code will be copied from there to set up the site platform. If not provided, the source site may be inspected to deduce this.'),
         'example-value' => 'git@git.company.com:projectname/website-d7.git',
       ),
+      'force' => array(
+        'description' => dt('Continue with the next stages even if a previous stage fails. Discrepancies in server drush versions can introduce false positives that need to be ignored.'),
+        'aliases' => array('f'),
+      ),
     ),
     'examples' => array(
       'drush get @projectname.uat.preview' => dt('Copy the named site to your local dev environment. Most local parameters will be defaulted.'),
@@ -567,6 +571,7 @@ function drush_get_site() {
     drush_log(dt('No site given', $strings), 'warning');
     return NULL;
   }
+  $force = drush_get_option('force', FALSE);
 
   foreach ($site_list as $source_site_alias) {
     $strings['@source_site_alias'] = $source_site_alias;
@@ -638,8 +643,11 @@ function drush_get_site() {
 
     drush_log(dt("About to rsync ALL FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already been excluded via the source sites site-alias settings.", $strings), 'ok');
     if (!drush_mkdir($local_root, TRUE)) {
-      drush_log(dt("Could not prepare local root directory @local_root to copy into. Probably permissions. Aborting", $strings), 'error');
-      continue;
+      drush_log(dt("Could not prepare local root directory @local_root to copy into. Probably permissions.", $strings), 'error');
+      if (!$force) {
+        drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
+        continue;
+      }
     }
 
     // Recent version of drush stopped assuming yes when dispatching
@@ -650,7 +658,7 @@ function drush_get_site() {
     // Mean that things get skipped unless we
     // either force a yes,
     // (first Save the current state:)
-    // $affirmative = drush_get_context(DRUSH_AFFIRMATIVE);
+    $affirmative = drush_get_context(DRUSH_AFFIRMATIVE);
     // drush_set_context(DRUSH_AFFIRMATIVE, TRUE);
     // ..or leave it interactive.
     $backend_options = array('interactive' => TRUE);
@@ -658,7 +666,9 @@ function drush_get_site() {
     // over a tunnel (dunno why)
     // Run the proc.
     $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
+
     print_r($rsynced_success);
+
     if ($rsynced_success && !$rsynced_success['error_status']) {
       // TODO - more checking - seems possible to get a success flagged,
       // but no actual files. Do you really want to continue? (y/n): Cancelled.
@@ -673,8 +683,12 @@ function drush_get_site() {
       else {
         drush_log(dt("Rsync result was FALSE, yet no error status reported. This may happen when tunneling or other things are happening..", $strings), 'error');
       }
-      drush_log(dt("Failed to rsync site files from @source_site_alias to @local_site_alias. Aborting", $strings), 'error');
-      continue;
+      // If the alleged failure was a false negative, Bowl on regardless.
+      // Don't abort I guess.
+      if (!$force) {
+        drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
+        // continue;
+      }
     }
 
     // Now initialize a site directory in the new platform.
@@ -705,10 +719,14 @@ function drush_get_site() {
     }
     else {
       drush_log(dt("Site Install seems to have failed.", $strings), 'error');
+      print_r($site_install_success);
       $strings['@command'] = "drush $local_site_alias site-install " . implode(' ', $site_install_args) . ' ' . implode(' ', $site_install_options);
-      drush_log(dt("You'll have to investigate why a command like\n  command\n failed.", $strings), 'error');
-      drush_log(dt("Depending where site-insatll failed, you should probably DROP the %local_db database before trying again.", $strings), 'error');
-      continue;
+      drush_log(dt("You'll have to investigate why a command like\n  @command\n failed.", $strings), 'error');
+      drush_log(dt("Depending where site-install failed, you should probably DROP the %local_db database before trying again.", $strings), 'error');
+      if (!$force) {
+        drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
+        continue;
+      }
     }
 
     // Almost there - just the database sync left.
@@ -725,7 +743,18 @@ function drush_get_site() {
     }
     else {
       drush_log(dt("Failed to sql-sync site DB from @source_site_alias to @local_site_alias. This feels like a problem, so exiting", $strings), 'error');
-      continue;
+      if (!$force) {
+        drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
+        continue;
+      }
+    }
+
+    // As a developer shortcut, note the site identifier as a text file
+    // in the project root.
+    // We can use this to avoid too much typing or remembering things.
+    $shorthand_filepath = dirname($local_root) . DIRECTORY_SEPARATOR . $local_site_spec['role'];
+    if (is_writable($shorthand_filepath)) {
+      file_put_contents($shorthand_filepath, $local_site_alias);
     }
 
     // Reset the yes/no state so it doesn't mess up other logic.
@@ -736,6 +765,8 @@ function drush_get_site() {
     drush_print(dt("#########"));
     if (drush_confirm('Do you want to run the server now?')) {
       $runserver_success = drush_invoke_process($local_site_alias, 'runserver');
+      $strings['%runserver_success'] = $runserver_success;
+      drush_print(dt("Ran stand-alone web server %runserver_success", $strings));
     }
 
   }

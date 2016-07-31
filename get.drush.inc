@@ -421,7 +421,7 @@ function drush_get_whois($site_alias) {
   $site_spec = NULL;
   $site_name = ltrim($site_alias, '@');
 
-  if (drush_get_option('refresh', FALSE)) {
+  if (! drush_get_option('refresh', FALSE)) {
     // Check the local list of known aliases first.
     $site_spec = drush_sitealias_get_record($site_alias);
     if (!empty($site_spec)) {
@@ -462,29 +462,30 @@ function drush_get_whois($site_alias) {
     return NULL;
   }
 
+  // If we fetched a remote site description, we may also need to make extra
+  // notes about how to connect to its ssh server.
+  if (!empty($site_spec['server'])) {
+    // Aegir-flavoured.
+    if ($site_spec['server'] = '@server_master') {
+      // Presumably, the specs used to connect to the $master_alias
+      // are the specs we need to use to connect to the things it looks after.
+      $site_spec['parent'] = $master_alias;
+      // There is a chance that just merging everything from $master_alias
+      // into this spec may be messy, but it just-works pretty neatly.
+      // TODO revisit now that drush has deprecated partn inheritance.
+    }
+  }
+
   // Optionally save that config locally for next time.
   if (drush_get_option('save', '')) {
     // Build the PHP string.
-    $aliases[$site_name] = $site_spec;
-    $site_spec_string = var_export($aliases, TRUE) . ';' . PHP_EOL;
+    $site_spec_string = "\$aliases['$site_name'] = " . var_export($site_spec, TRUE) . ';' . PHP_EOL;
 
     $overwrite = drush_get_option('refresh');
     $saved = drush_get_save_alias($site_alias, $site_spec_string, $overwrite);
     if (!$saved) {
       drush_log(dt('Did not save the site-alias to the expected site-alias directory.', $strings), 'error');
     }
-
-    /*
-    // Maybe we could eval that string now,
-    // But instead - use our own API to read back in the site spec
-    // that we just wrote.
-    $strings['%alias_directory'] = dirname($saved);
-    // It should resolve now.
-    $site_spec = drush_sitealias_get_record($site_alias);
-    if (empty($site_spec)) {
-    drush_log(dt('Failed to read the site specification (@site-alias) that I thought I just saved. Could be that we are configured to save site-aliases into a directory that we are not configured to read from. That is probably no help. Ensure that the directory %alias_directory is configured to be in your drush site-alias search paths.', $strings), 'error');
-    }
-     */
   }
   if ($site_spec) {
     return array($site_name => $site_spec);
@@ -701,6 +702,14 @@ function drush_get_site() {
       "--db-url=$local_db",
       "--sites-subdir=$local_uri",
     );
+
+    // It's handy to set up some local settings overrides on a local copy.
+    // D7 style file path overrides.
+    $settings_local = "<" . "?" . "php
+      \$conf['file_private_path']   = 'sites/' . basename(__DIR__) . '/private/files';
+      \$conf['file_public_path']    = 'sites/' . basename(__DIR__) . '/files';
+      \$conf['file_temporary_path'] = 'sites/' . basename(__DIR__) . '/private/temp';
+    ";
 
     // When running drush_invoke_process, we may find ourselves running
     // a totally different version of drush!

@@ -94,14 +94,14 @@ The following configs are expected to be put in your
 
 ````
     # Where to query for site-aliases I've not heard of before.
-    $options['get-master-alias'] = '@hostmaster.centraldev';
+    $options['master-alias'] = '@hostmaster.centraldev';
 
     # Where my local site-alias files are stored
     # @see example.drushrc.php
     $options['alias-path'][] = '/var/drush/site-aliases';
 
     # Where I build sites on my local machine.
-    $options['get-docroot-pattern'] = '/var/www/%short-name/%docroot-name';
+    $options['docroot-pattern'] = '/var/www/%short-name/%docroot-name';
 
     # For drush site-install and drush get.
     # DB connection settings appropriate for administering local MySQL.

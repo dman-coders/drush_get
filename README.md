@@ -30,6 +30,13 @@ want to name local database copies.
 It then runs drush rsync, site-install, and sql-sync commands that *should*
 produce local working site clones pretty quick.
 
+Requirements
+=======
+
+This utility extends the usage of [drush remote site-aliases](https://www.drupal.org/node/1401522). You should be familiar with those, and have already established a working site-alias record for your target server. Your user account must have the appropriate ssh key installed on the target server, and the network connection should be able to invoke a 'drush status' command over there.
+These requirements are *tested* during the `get-setup` phase, but as there are a huge number of ways you may have this configured (you may want bastions, tunnels, shared user accounts etc), there is no single HOWTO for getting that connected.
+
+
 Install
 =======
 

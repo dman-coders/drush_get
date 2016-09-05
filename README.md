@@ -30,6 +30,22 @@ want to name local database copies.
 It then runs drush rsync, site-install, and sql-sync commands that *should*
 produce local working site clones pretty quick.
 
+Install
+=======
+
+Drush 8+ is required.
+
+* Download this drush command into any of the [supported locations for drush command files](http://docs.drush.org/en/master/commands/). EG:
+  
+  ````
+  git clone git@github.com:dman-coders/drush_get.git ~/.drush/drush_get
+  ````
+* Clear the drush cache: 
+  
+  ```` 
+  drush cc drush
+  ````
+
 Commands
 ========
 

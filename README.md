@@ -35,7 +35,7 @@ Requirements
 
 Drush
 -----
-Drush 8+ is required. In order to run the 'runserver' process at the end, [it's currently neccessary](https://github.com/drush-ops/drush/issues/2090#issuecomment-232172907) to use the 'composer' method of installation, not [the 'phar' download method currently documented](http://docs.drush.org/en/master/install/).
+Drush 8+ is required. In order to run the 'runserver' process at the end, [it's currently neccessary](https://github.com/drush-ops/drush/issues/2090#issuecomment-232172907) to use the 'composer' method of installation, not [the 'phar' download method currently documented](http://docs.drush.org/en/master/install/). Using composer will also ensure that the appropriate version of drush for your available php version will be used.
 
 Drush site-aliases
 ------------------
@@ -47,6 +47,12 @@ Install
 =======
 
 * Download this drush command into any of the [supported locations for drush command files](http://docs.drush.org/en/master/commands/). EG:
+
+  ````
+  git clone https://github.com/dman-coders/drush_get.git ~/.drush/drush_get
+  ````
+  
+  Or, for a development copy:
   
   ````
   git clone git@github.com:dman-coders/drush_get.git ~/.drush/drush_get

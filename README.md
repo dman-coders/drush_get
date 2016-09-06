@@ -33,14 +33,18 @@ produce local working site clones pretty quick.
 Requirements
 =======
 
+Drush
+-----
+Drush 8+ is required. In order to run the 'runserver' process at the end, [it's currently neccessary](https://github.com/drush-ops/drush/issues/2090#issuecomment-232172907) to use the 'composer' method of installation, not [the 'phar' download method currently documented](http://docs.drush.org/en/master/install/).
+
+Drush site-aliases
+------------------
 This utility extends the usage of [drush remote site-aliases](https://www.drupal.org/node/1401522). You should be familiar with those, and have already established a working site-alias record for your target server. Your user account must have the appropriate ssh key installed on the target server, and the network connection should be able to invoke a 'drush status' command over there.
 These requirements are *tested* during the `get-setup` phase, but as there are a huge number of ways you may have this configured (you may want bastions, tunnels, shared user accounts etc), there is no single HOWTO for getting that connected.
 
 
 Install
 =======
-
-Drush 8+ is required.
 
 * Download this drush command into any of the [supported locations for drush command files](http://docs.drush.org/en/master/commands/). EG:
   

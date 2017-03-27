@@ -111,11 +111,20 @@ The following configs are expected to be put in your
     $options['alias-path'][] = '/var/drush/site-aliases';
 
     # Where I build sites on my local machine.
-    $options['docroot-pattern'] = '/var/www/%short-name/%docroot-name';
+    $options['get-docroot-pattern'] = '/var/www/%short-name/%docroot-name';
+
+    # How to name the locally created site instances.
+    $options['get-uri-pattern'] = '%role.%short-name.localhost';
+
+    # When provisioning a db (if not using Aegir or DevDesktop)
+    # what pattern to use.
+    # NOTE: in some environments there is a significant difference between 'localhost' and '127.0.0.1'
+    $options['get-db-pattern'] = 'mysql://%short-name:%random@127.0.0.1:3306/%short-name';
 
     # For drush site-install and drush get.
     # DB connection settings appropriate for administering local MySQL.
-    $options['db-su'] = 'drupaladmin';
+    # Should have 'create database' permissions etc.
+    $options['db-su'] = 'root';
     $options['db-su-pw'] = 'mypass';
 ````
 
@@ -154,7 +163,17 @@ A simple static pattern may be
   `%docroot-name` will be the first one of :
   - the 'role' from site-alias if set, eg 'dev', 'test', 'uat'.
   - the string 'docroot'
-   
+
+### get-db-pattern
+
+  When provisioning a db (if not using Aegir or DevDesktop manually)
+  what pattern to use.
+  NOTE: in some environments there is a significant difference between 'localhost' and '127.0.0.1'
+
+    $options['get-db-pattern'] = 'mysql://%short-name:%random@127.0.0.1:3306/%short-name';
+
+   This pattern is resolved and then used by the drush site-install command as
+   `--db-url` option, so see `drush help site-install` for troubleshooting.
    
 ### `db-su`, `db-su-pw`
 

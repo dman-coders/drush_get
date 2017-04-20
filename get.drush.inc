@@ -176,12 +176,9 @@ function drush_get_setup() {
     return FALSE;
   }
 
-  // You should set db_pattern in your own drushrc.php
-  // Acquia dev desktop uses port 3306 or 3307 and uses drupaluser.
-  $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name:%random@127.0.0.1:3306/%short-name');
-  $local_db = drush_get_process_tokens($get_db_pattern, $sampleproject_spec);
-  $strings['@get-db-pattern'] = $get_db_pattern;
+  $local_db = db_pattern_from_site_spec($sampleproject_spec);
   $strings['@local_db'] = $local_db;
+  $strings['@get-db-pattern'] = drush_get_option('get-db-pattern', 'mysql://%short-name_%role:%random@127.0.0.1:3306/%short-name_%role');;
   drush_log(dt("Your generic database connection pattern 'get-db-pattern' is '@get-db-pattern' and your database admin user is '@db-su' .", $strings), 'ok');
   drush_log(dt("Locally copied sites will be stored in the database identified like\n  '@local_db' .", $strings), 'ok');
 
@@ -422,7 +419,7 @@ function drush_get_whois($site_alias) {
   $site_spec = NULL;
   $site_name = ltrim($site_alias, '@');
 
-  if (! drush_get_option('refresh', FALSE)) {
+  if (!drush_get_option('refresh', FALSE)) {
     // Check the local list of known aliases first.
     $site_spec = drush_sitealias_get_record($site_alias);
     if (!empty($site_spec)) {
@@ -564,7 +561,7 @@ function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE
  *
  * A drush command.
  *
- * @return NULL
+ * @return null
  */
 function drush_get_site() {
   $strings = array();
@@ -594,18 +591,12 @@ function drush_get_site() {
     // * A file-copy down
     // * Database sync down
     // * Local status check.
-    // Build the local site site spec, derived from the remote one.
-    // Guess a good shortname/slug.
-    $name_parts = explode('.', $source_site_spec['#name']);
-    if ($name_parts[0] == 'www' || $name_parts[0] == 'dev' || $name_parts[0] == 'live') {
-      array_shift($name_parts);
-    }
-    $short_name = array_shift($name_parts);
+    $short_name = short_name_from_site_spec($source_site_spec);
     $strings['@short_name'] = $short_name;
 
     // Derive the local dev site definition.
     $local_site_spec = array(
-      'name' => $short_name,
+      'name' => "$short_name",
       'role' => 'mirror',
       'path-aliases' => array(),
     );
@@ -639,6 +630,8 @@ function drush_get_site() {
       // '--exclude-paths=backup_migrate'.
       // In order to speed up bootstrapping, exclude files folders during
       // this phase of mirroring.
+      // However, --exclude-files will not exclude files found in OTHER
+      // multisite dirs, or may pull down symlinked folders. TODO - solve?
       '--exclude-files',
       // '--exclude-sites'.
     );
@@ -667,6 +660,7 @@ function drush_get_site() {
     // HOWEVER, interactive sometimes fails to register what's happening
     // over a tunnel (dunno why)
     // Run the proc.
+    drush_log(print_r(['command' => 'rsync', 'args' => $rsync_args, 'options' => $rsync_options, 'backend' => $backend_options], 1), 'debug');
     $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
 
     print_r($rsynced_success);
@@ -678,8 +672,13 @@ function drush_get_site() {
     }
     else {
       if ($rsynced_success['error_status']) {
-        foreach ($rsynced_success['error_log'] as $log) {
-          drush_log($log, 'error');
+        if (!empty($rsynced_success['error_log'])) {
+          foreach ($rsynced_success['error_log'] as $log) {
+            drush_log($log, 'error');
+          }
+        }
+        else {
+          drush_log('Unknown error returned from rsync attempt', 'error');
         }
       }
       else {
@@ -689,43 +688,61 @@ function drush_get_site() {
       // Don't abort I guess.
       if (!$force) {
         drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
-        // continue;
+        // continue;.
       }
     }
 
     // Now initialize a site directory in the new platform.
     // What will the new db connection be?
-    $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name:%random@localhost:3306/%short-name');
+    $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name_$role:%random@127.0.0.1:3306/%short-name_%role');
     $local_db = drush_get_process_tokens($get_db_pattern, $local_site_spec);
 
     $site_install_args = array();
+    // If we want to continue emulating multisites locally, set sites-subdir.
+    // This is useful to identify assumptions about hard-coded paths etc,
+    // and will maintain aegir like setups BUT things remain tricky.
+    // If we choose not to do that, and fall back to 'default', many shortcuts
+    // remain easier.
+    //
+    // If using a multisite named sites dir,
+    // drush runserver does not cooperate with multisite without help.
+    // Current work-arounds are to copy the settings into default
+    // (which is not quite right as it fudges it)
+    // or edit sites.php to redirect 'default' => $local_uri
+    // which is more official.
+    $sites_subdir = $local_uri;
+    $sites_subdir = 'default';
+    $strings['%sites_subdir'] = $sites_subdir;
     $site_install_options = array(
-      "--db-url=$local_db",
-      "--sites-subdir=$local_uri",
+      "--db-url=${local_db}",
+      "--sites-subdir=${sites_subdir}",
     );
 
-    // It's handy to set up some local settings overrides on a local copy.
+    // It's often necessary to set up some local settings overrides
+    // on a local copy.
     // D7 style file path overrides.
     $settings_local = "<" . "?" . "php
-      \$conf['file_private_path']   = 'sites/' . basename(__DIR__) . '/private/files';
-      \$conf['file_public_path']    = 'sites/' . basename(__DIR__) . '/files';
-      \$conf['file_temporary_path'] = 'sites/' . basename(__DIR__) . '/private/temp';
+      \$conf['file_private_path']   = 'sites/${sites_subdir}/private/files';
+      \$conf['file_public_path']    = 'sites/${sites_subdir}/files';
+      \$conf['file_temporary_path'] = 'sites/${sites_subdir}/private/temp';
     ";
+    file_put_contents("${local_root}/sites/${sites_subdir}/settings.local.php", $settings_local);
 
     // When running drush_invoke_process, we may find ourselves running
     // a totally different version of drush!
     // Site instances may have a local drush - of a difference version even.
     // That forks into a cli process and everything.
+    //
     // I actually do NOT want the full site-install,
     // But it's hella easier that just trying to invoke just the needed
     // database creation part of it.
     // I really just wanted drush_core_pre_site_install().
-    drush_log(dt("About to initialize the site directory and a new database.", $strings), 'ok');
+    drush_log(dt("About to initialize the site directory '%sites_subdir' and a new database.", $strings), 'ok');
     $site_install_success = drush_invoke_process($local_site_alias, 'site-install', $site_install_args, $site_install_options, $backend_options);
 
     if ($site_install_success) {
       drush_log(dt("Site Install seems to have been a success.", $strings), 'success');
-      drush_log(dt("You can probably run `drush @local_site_alias runserver` and see it working.", $strings), 'ok');
+      drush_log(dt("You can probably run `drush @local_site_alias runserver --uri=@local_uri /` and see it working. (Currently empty, DB to come)", $strings), 'ok');
     }
     else {
       drush_log(dt("Site Install seems to have failed.", $strings), 'error');
@@ -745,7 +762,7 @@ function drush_get_site() {
       $local_site_alias,
     );
     $sql_sync_options = array();
-    drush_log(dt("About to sync the remote database down. This usually takes time.", $strings), 'ok');
+    drush_log(dt("About to sync the remote database down. This usually takes time. Effectively running `drush sql-sync @source_site_alias @local_site_alias'", $strings), 'ok');
     $sql_synced_success = drush_invoke_process('@self', 'sql-sync', $sql_sync_args, $sql_sync_options, $backend_options);
     print_r($sql_synced_success);
     if ($sql_synced_success) {
@@ -771,14 +788,58 @@ function drush_get_site() {
     drush_set_context('DRUSH_AFFIRMATIVE', $affirmative);
 
     drush_print(dt("#########"));
-    drush_print(dt("You can probably run the site now, by invoking: \n  drush @local_site_alias runserver", $strings));
+    drush_print(dt("You can probably run the site now, by invoking: \n  drush @local_site_alias runserver --uri=@local_uri /", $strings));
     drush_print(dt("#########"));
     if (drush_confirm('Do you want to run the server now?')) {
-      $runserver_success = drush_invoke_process($local_site_alias, 'runserver');
+      $runserver_success = drush_invoke_process($local_site_alias, 'runserver', ['/'], ['--uri=' . $local_uri]);
       $strings['%runserver_success'] = $runserver_success;
       drush_print(dt("Ran stand-alone web server %runserver_success", $strings));
     }
 
   }
 
+}
+
+/**
+ * Guess a good shortname/slug.
+ *
+ * @param $site_spec
+ */
+function short_name_from_site_spec($site_spec) {
+  // This is a non-standard addition that may be explicitly added to
+  // custom site-aliases.
+  // Note, 'name' is not '#name'.
+  if (isset($site_spec['name'])) {
+    return $site_spec['name'];
+  }
+  // Guess projectname from
+  // Site-alias IDs may be like
+  // dev.myproject.server.tld
+  // myproject.tld.com
+  // www.myproject.tld.com
+  // dev_branch.myproject.server.tld
+  // 20170707.myproject.server.tld.
+  $name_parts = explode('.', $site_spec['#name']);
+  if (in_array($name_parts[0], array('www', 'dev', 'live', 'test', 'uat', 'prod'))) {
+    array_shift($name_parts);
+  }
+  $short_name = array_shift($name_parts);
+  return $short_name;
+}
+
+/**
+ *
+ */
+function db_pattern_from_site_spec($site_spec) {
+
+  // You should set db_pattern in your own drushrc.php
+  // Acquia dev desktop uses port 3306 or 3307 and uses drupaluser.
+  $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name_%role:%random@127.0.0.1:3306/%short-name_%role');
+  $local_db = drush_get_process_tokens($get_db_pattern, $site_spec);
+
+  // Username cannot be too long, or mysql fails. Need to repair that!
+  $db_spec = drush_convert_db_from_db_url($local_db);
+  $db_spec['username'] = substr($db_spec['username'], 0, 16);
+  $db_url = drush_sitealias_convert_db_spec_to_db_url($db_spec);
+  return $db_url;
 }

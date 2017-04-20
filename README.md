@@ -119,7 +119,7 @@ The following configs are expected to be put in your
     # When provisioning a db (if not using Aegir or DevDesktop)
     # what pattern to use.
     # NOTE: in some environments there is a significant difference between 'localhost' and '127.0.0.1'
-    $options['get-db-pattern'] = 'mysql://%short-name:%random@127.0.0.1:3306/%short-name';
+    $options['get-db-pattern'] = 'mysql://%short-name:%random@127.0.0.1:3306/%short-name_%role';
 
     # For drush site-install and drush get.
     # DB connection settings appropriate for administering local MySQL.

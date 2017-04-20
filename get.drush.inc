@@ -141,6 +141,7 @@ function get_drush_command() {
  */
 function drush_get_setup() {
   drush_log(dt("About to review your local setup. This will probe your local storage path for projects, your access to your own database, connections to your remote list of projects, and the status there.", array()), 'info');
+  drush_log(dt("These patterns can be adjusted in your own drushrc.php, see 'drush topic get' for more.", array()), 'ok');
   drush_log(dt("#### drush-get patterns ####"));
 
   $out = array();
@@ -177,7 +178,7 @@ function drush_get_setup() {
 
   // You should set db_pattern in your own drushrc.php
   // Acquia dev desktop uses port 3306 or 3307 and uses drupaluser.
-  $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name:%random@localhost:3306/%short-name');
+  $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name:%random@127.0.0.1:3306/%short-name');
   $local_db = drush_get_process_tokens($get_db_pattern, $sampleproject_spec);
   $strings['@get-db-pattern'] = $get_db_pattern;
   $strings['@local_db'] = $local_db;

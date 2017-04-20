@@ -30,6 +30,39 @@ want to name local database copies.
 It then runs drush rsync, site-install, and sql-sync commands that *should*
 produce local working site clones pretty quick.
 
+Requirements
+=======
+
+Drush
+-----
+Drush 8+ is required. In order to run the 'runserver' process at the end, [it's currently neccessary](https://github.com/drush-ops/drush/issues/2090#issuecomment-232172907) to use the 'composer' method of installation, not [the 'phar' download method currently documented](http://docs.drush.org/en/master/install/). Using composer will also ensure that the appropriate version of drush for your available php version will be used.
+
+Drush site-aliases
+------------------
+This utility extends the usage of [drush remote site-aliases](https://www.drupal.org/node/1401522). You should be familiar with those, and have already established a working site-alias record for your target server. Your user account must have the appropriate ssh key installed on the target server, and the network connection should be able to invoke a 'drush status' command over there.
+These requirements are *tested* during the `get-setup` phase, but as there are a huge number of ways you may have this configured (you may want bastions, tunnels, shared user accounts etc), there is no single HOWTO for getting that connected.
+
+
+Install
+=======
+
+* Download this drush command into any of the [supported locations for drush command files](http://docs.drush.org/en/master/commands/). EG:
+
+  ````
+  git clone https://github.com/dman-coders/drush_get.git ~/.drush/drush_get
+  ````
+  
+  Or, for a development copy:
+  
+  ````
+  git clone git@github.com:dman-coders/drush_get.git ~/.drush/drush_get
+  ````
+* Clear the drush cache: 
+  
+  ```` 
+  drush cc drush
+  ````
+
 Commands
 ========
 
@@ -71,7 +104,7 @@ The following configs are expected to be put in your
 
 ````
     # Where to query for site-aliases I've not heard of before.
-    $options['get-master-alias'] = '@hostmaster.centraldev';
+    $options['master-alias'] = '@hostmaster.centraldev';
 
     # Where my local site-alias files are stored
     # @see example.drushrc.php
@@ -80,9 +113,18 @@ The following configs are expected to be put in your
     # Where I build sites on my local machine.
     $options['get-docroot-pattern'] = '/var/www/%short-name/%docroot-name';
 
+    # How to name the locally created site instances.
+    $options['get-uri-pattern'] = '%role.%short-name.localhost';
+
+    # When provisioning a db (if not using Aegir or DevDesktop)
+    # what pattern to use.
+    # NOTE: in some environments there is a significant difference between 'localhost' and '127.0.0.1'
+    $options['get-db-pattern'] = 'mysql://%short-name:%random@127.0.0.1:3306/%short-name';
+
     # For drush site-install and drush get.
     # DB connection settings appropriate for administering local MySQL.
-    $options['db-su'] = 'drupaladmin';
+    # Should have 'create database' permissions etc.
+    $options['db-su'] = 'root';
     $options['db-su-pw'] = 'mypass';
 ````
 
@@ -121,7 +163,17 @@ A simple static pattern may be
   `%docroot-name` will be the first one of :
   - the 'role' from site-alias if set, eg 'dev', 'test', 'uat'.
   - the string 'docroot'
-   
+
+### get-db-pattern
+
+  When provisioning a db (if not using Aegir or DevDesktop manually)
+  what pattern to use.
+  NOTE: in some environments there is a significant difference between 'localhost' and '127.0.0.1'
+
+    $options['get-db-pattern'] = 'mysql://%short-name:%random@127.0.0.1:3306/%short-name';
+
+   This pattern is resolved and then used by the drush site-install command as
+   `--db-url` option, so see `drush help site-install` for troubleshooting.
    
 ### `db-su`, `db-su-pw`
 

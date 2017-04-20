@@ -641,6 +641,9 @@ function drush_get_site() {
       '--exclude-files',
       // '--exclude-sites'.
     );
+    // @TODO --exclude-files did not work in all cases ...
+    // I got all (4G) user files downloaded last time.
+    // Investigate. (and log better)
 
     drush_log(dt("About to rsync ALL FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already been excluded via the source sites site-alias settings.", $strings), 'ok');
     if (!drush_mkdir($local_root, TRUE)) {
@@ -686,6 +689,7 @@ function drush_get_site() {
       }
       // If the alleged failure was a false negative, Bowl on regardless.
       // Don't abort I guess.
+      // TODO: pause and ask about Abort/Retry/Ignore.
       if (!$force) {
         drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
         // continue;

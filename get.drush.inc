@@ -370,7 +370,9 @@ function drush_get_process_tokens($pattern, $site_spec) {
 
   // safe-uri can be used for longer slugs
   // - Good for a database name if shortname is reserved.
-  $strings['%safe-uri'] = preg_replace('/[^a-z0-9]+/', '_', strtolower($strings['@local_uri']));
+  if (isset($strings['@local_uri'])) {
+    $strings['%safe-uri'] = preg_replace('/[^a-z0-9]+/', '_', strtolower($strings['@local_uri']));
+  }
 
   if (!isset($strings['%docroot-name'])) {
     if (isset($strings['%role'])) {
@@ -736,6 +738,7 @@ function drush_get_site() {
       "--sites-subdir=${sites_subdir}",
     );
 
+    // Adjust local file storage rules.
     configure_site_settings($local_root, $sites_subdir);
 
     // When running drush_invoke_process, we may find ourselves running
@@ -869,16 +872,25 @@ function configure_site_settings($local_root, $sites_subdir='default'){
     \$conf['file_public_path']    = 'sites/${sites_subdir}/files';
     \$conf['file_temporary_path'] = 'sites/${sites_subdir}/private/temp';
   ";
-  file_put_contents("${local_root}/sites/${sites_subdir}/settings.local.php", $settings_local);
+  $saved = file_put_contents("${local_root}/sites/${sites_subdir}/settings.local.php", $settings_local);
+  if (!$saved) {
+    drush_log('Failed to update /sites/${sites_subdir}/settings.local.php . Sometimes permissions can cause trouble writing to this directory.', 'error');
+  }
+  // It's hard to edit the settings file after permissions change,
+  // It's easier to edit default.settings and let it get copied
+  // before running site-install.
   $use_settings_local = "
   # Additional site configuration settings.
   if (file_exists(__DIR__ . '/settings.local.php')) {
     include_once(__DIR__ . '/settings.local.php');
   }
   ";
-  file_put_contents("${local_root}/sites/${sites_subdir}/settings.php", $use_settings_local, FILE_APPEND);
+  $saved = file_put_contents("${local_root}/sites/${sites_subdir}/default.settings.php", $use_settings_local, FILE_APPEND);
+  if (!$saved) {
+    drush_log('Failed to update /sites/${sites_subdir}/settings.php . Sometimes permissions can cause trouble writing to this directory.', 'error');
+  }
 
-  // I thought site-install would have ensured these were set up.
+  // I thought site-install would have ensured these folders were set up.
   // But maybe not always.
   $dirs = [
     "sites/${sites_subdir}/files",

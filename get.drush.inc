@@ -108,6 +108,15 @@ function get_drush_command() {
         'description' => dt('Continue with the next stages even if a previous stage fails. Discrepancies in server drush versions can introduce false positives that need to be ignored.'),
         'aliases' => array('f'),
       ),
+      'project-name' => array(
+        'description' => dt('Project name to use when getting. Used for naming the project folder (/var/www/{projectname}/mirror) and local site (http://mirror.{projectname}.local/).'),
+        'example-value' => 'myproject',
+      ),
+      'instance' => array(
+        'example-value' => 'devcopy',
+        'description' => dt('Instance name to use when getting. Used for naming the project folder (/var/www/projectname/{instance}) and local site (http://{instance}.projectname.local/) and database. Defaults to "mirror" or is influenced by the patterns.'),
+
+      ),
     ),
     'examples' => array(
       'drush get @projectname.uat.preview' => dt('Copy the named site to your local dev environment. Most local parameters will be defaulted.'),
@@ -353,7 +362,7 @@ function drush_get_process_tokens($pattern, $site_spec) {
       $strings['%short-name'] = $strings['%name'];
     }
     else {
-      $strings['%short-name'] = $strings['%uri'];
+      $strings['%short-name'] = $strings['@local_uri'];
     }
   }
   // short-name must always be safe for filesystem and database identifiers.
@@ -361,7 +370,7 @@ function drush_get_process_tokens($pattern, $site_spec) {
 
   // safe-uri can be used for longer slugs
   // - Good for a database name if shortname is reserved.
-  $strings['%safe-uri'] = preg_replace('/[^a-z0-9]+/', '_', strtolower($strings['%uri']));
+  $strings['%safe-uri'] = preg_replace('/[^a-z0-9]+/', '_', strtolower($strings['@local_uri']));
 
   if (!isset($strings['%docroot-name'])) {
     if (isset($strings['%role'])) {
@@ -630,16 +639,21 @@ function drush_get_site() {
       // '--exclude-paths=backup_migrate'.
       // In order to speed up bootstrapping, exclude files folders during
       // this phase of mirroring.
-      // However, --exclude-files will not exclude files found in OTHER
-      // multisite dirs, or may pull down symlinked folders. TODO - solve?
       '--exclude-files',
+      // However, --exclude-files will not exclude files found in OTHER
+      // multisite dirs, or may pull down symlinked folders.
+      '--exclude-other-sites',
+      // exclude-other-sites leaves 'default' behind,
+      // leaving us with no default.settings?
+      '--include-paths=sites/default'
       // '--exclude-sites'.
     );
+
     // @TODO --exclude-files did not work in all cases ...
     // I got all (4G) user files downloaded last time.
     // Investigate. (and log better)
 
-    drush_log(dt("About to rsync ALL FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already been excluded via the source sites site-alias settings.", $strings), 'ok');
+    drush_log(dt("About to rsync MOST FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already been excluded via the source sites site-alias settings.", $strings), 'ok');
     if (!drush_mkdir($local_root, TRUE)) {
       drush_log(dt("Could not prepare local root directory @local_root to copy into. Probably permissions.", $strings), 'error');
       if (!$force) {
@@ -656,7 +670,7 @@ function drush_get_site() {
     // Mean that things get skipped unless we
     // either force a yes,
     // (first Save the current state:)
-    $affirmative = drush_get_context(DRUSH_AFFIRMATIVE);
+    $affirmative = drush_get_context('DRUSH_AFFIRMATIVE');
     // drush_set_context(DRUSH_AFFIRMATIVE, TRUE);
     // ..or leave it interactive.
     $backend_options = array('interactive' => TRUE);
@@ -722,15 +736,7 @@ function drush_get_site() {
       "--sites-subdir=${sites_subdir}",
     );
 
-    // It's often necessary to set up some local settings overrides
-    // on a local copy.
-    // D7 style file path overrides.
-    $settings_local = "<" . "?" . "php
-      \$conf['file_private_path']   = 'sites/${sites_subdir}/private/files';
-      \$conf['file_public_path']    = 'sites/${sites_subdir}/files';
-      \$conf['file_temporary_path'] = 'sites/${sites_subdir}/private/temp';
-    ";
-    file_put_contents("${local_root}/sites/${sites_subdir}/settings.local.php", $settings_local);
+    configure_site_settings($local_root, $sites_subdir);
 
     // When running drush_invoke_process, we may find ourselves running
     // a totally different version of drush!
@@ -810,6 +816,12 @@ function drush_get_site() {
  * @param $site_spec
  */
 function short_name_from_site_spec($site_spec) {
+  // The command may have explicitly defined a name to use for our project.
+  // Use that if so.
+  if ($projectname = drush_get_option('project-name', '')) {
+    return $projectname;
+  }
+
   // This is a non-standard addition that may be explicitly added to
   // custom site-aliases.
   // Note, 'name' is not '#name'.
@@ -846,4 +858,37 @@ function db_pattern_from_site_spec($site_spec) {
   $db_spec['username'] = substr($db_spec['username'], 0, 16);
   $db_url = drush_sitealias_convert_db_spec_to_db_url($db_spec);
   return $db_url;
+}
+
+function configure_site_settings($local_root, $sites_subdir='default'){
+  // It's often necessary to set up some local settings overrides
+  // on a local copy.
+  // D7 style file path overrides.
+  $settings_local = "<" . "?" . "php
+    \$conf['file_private_path']   = 'sites/${sites_subdir}/private/files';
+    \$conf['file_public_path']    = 'sites/${sites_subdir}/files';
+    \$conf['file_temporary_path'] = 'sites/${sites_subdir}/private/temp';
+  ";
+  file_put_contents("${local_root}/sites/${sites_subdir}/settings.local.php", $settings_local);
+  $use_settings_local = "
+  # Additional site configuration settings.
+  if (file_exists(__DIR__ . '/settings.local.php')) {
+    include_once(__DIR__ . '/settings.local.php');
+  }
+  ";
+  file_put_contents("${local_root}/sites/${sites_subdir}/settings.php", $use_settings_local, FILE_APPEND);
+
+  // I thought site-install would have ensured these were set up.
+  // But maybe not always.
+  $dirs = [
+    "sites/${sites_subdir}/files",
+    "sites/${sites_subdir}/private",
+    "sites/${sites_subdir}/private/files",
+    "sites/${sites_subdir}/private/temp",
+  ];
+  foreach($dirs as $dir) {
+    if (!is_dir("${local_root}/$dir")) {
+      mkdir("${local_root}/$dir");
+    }
+  }
 }

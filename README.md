@@ -140,6 +140,9 @@ so all staff can easily pull in info about all projects as needed.
 Where local copies of site-alias `*.alias.drushrc.php` files may be created.
 If using the optional --save write-back option,
 this alias-path should be writable.
+Local copies of the retrieved site-alias info may then be saved there
+for quicker future access. If you have more than one directory as a search path,
+the first one will be used as the write-back location.
 
 ### get-docroot-pattern
 

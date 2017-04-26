@@ -156,6 +156,7 @@ function drush_get_setup() {
   $out = array();
   $master_alias = drush_get_option('master-alias', '');
   $strings['@master-alias'] = $master_alias;
+  $out['master-alias'] = $master_alias;
 
   // Check local environment preferences.
   $sampleproject_spec = array(
@@ -230,6 +231,7 @@ function drush_get_setup() {
 
   if ($success) {
     drush_log(dt("Looked like we could add a database and grant permissions on it and work on it.", $strings), 'success');
+    $out['db-su-access'] = TRUE;
   }
   else {
     drush_log(dt("Looked like we failed to connect, create db, or grant permissions on a database as admin user '@db-su' trying to connect to, create and modify @local_db .", $strings), 'error');
@@ -328,6 +330,15 @@ function drush_get_setup() {
 
     }
   }
+  $alias_path = drush_get_alias_path();
+  if (!empty($alias_path)) {
+    $strings['%alias_path'] = $alias_path;
+    drush_log(dt('When caching info about site-aliases, they will be saved in %alias_path . This is the first alias-path value listed in your drushrc.php settings.', $strings), 'ok');
+    $out['alias_path'] = $alias_path;
+  }
+  else {
+    drush_log(dt("I don't have a place to store local cached copies of site-aliases retrieved from the master index. This would be the first alias-path value listed in your drushrc.php settings.", $strings), 'warning');
+  }
 
   return $out;
 }
@@ -366,7 +377,7 @@ function drush_get_process_tokens($pattern, $site_spec) {
     }
   }
   // short-name must always be safe for filesystem and database identifiers.
-  $strings['%short-name'] = preg_replace('/[^a-z0-9]+/', '-', strtolower($strings['%short-name']));
+  $strings['%short-name'] = preg_replace('/[^a-z0-9]+/', '_', strtolower($strings['%short-name']));
 
   // safe-uri can be used for longer slugs
   // - Good for a database name if shortname is reserved.
@@ -528,10 +539,8 @@ function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE
     $site_spec_string = '$aliases["' . $site_spec_string['#name'] . '"] = ' . var_export($site_spec_string, TRUE) . ';' . PHP_EOL;
   }
 
-  $alias_path = drush_get_option('alias-path', '');
-  if (is_array($alias_path)) {
-    $alias_path = reset($alias_path);
-  }
+  $alias_path = drush_get_alias_path();
+
   $clean_site_alias = ltrim($site_alias, '@');
   $alias_filepath = $alias_path . DIRECTORY_SEPARATOR . $clean_site_alias . '.alias.drushrc.php';
   $strings['@alias-filepath'] = $alias_filepath;
@@ -565,6 +574,17 @@ function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE
 
   drush_log(dt('Saved the alias info to @alias-filepath', $strings), 'ok');
   return $alias_filepath;
+}
+
+/**
+ * Return the local file directory where we save site-aliases.
+ */
+function drush_get_alias_path() {
+  $alias_path = drush_get_option('alias-path', array());
+  if (is_array($alias_path)) {
+    $alias_path = reset($alias_path);
+  }
+  return $alias_path;
 }
 
 /**
@@ -627,10 +647,21 @@ function drush_get_site() {
     // - that slash hash makes a huge difference in whether rsync works!
     $local_site_alias = "$local_root/#$local_uri";
     $strings['@local_site_alias'] = $local_site_alias;
-    drush_log(dt("Your generic project will be short_name @short_name.", $strings), 'ok');
-    drush_log(dt("Locally copied site @local_uri will be deployed into @local_root .", $strings), 'ok');
+    drush_log(dt("Your downloaded project will have the short_name:@short_name.", $strings), 'ok');
+    drush_log(dt("Locally copied site '@local_uri' will be deployed into '@local_root' .", $strings), 'ok');
 
-    // Initiate rsync of the remote real site (ignore VCS , get the real thing).
+    // What will the new db connection be?
+    $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name_$role:%random@127.0.0.1:3306/%short-name_%role');
+    $local_db = db_pattern_from_site_spec($local_site_spec);
+    $strings['@local_db'] = $local_db;
+    drush_log(dt("Locally copied site will be given database '@local_db' .", $strings), 'ok');
+
+    if (!drush_confirm('Do the values above look correct?')) {
+      drush_log(dt("You may want to exit and try again with the --project-name option set. For other options see drush topic docs-get.", $strings), 'ok');
+      return 'Exiting';
+    }
+
+      // Initiate rsync of the remote real site (ignore VCS , get the real thing).
     $rsync_args = array(
       $source_site_alias,
       $local_site_alias,
@@ -713,9 +744,6 @@ function drush_get_site() {
     }
 
     // Now initialize a site directory in the new platform.
-    // What will the new db connection be?
-    $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name_$role:%random@127.0.0.1:3306/%short-name_%role');
-    $local_db = drush_get_process_tokens($get_db_pattern, $local_site_spec);
 
     $site_install_args = array();
     // If we want to continue emulating multisites locally, set sites-subdir.

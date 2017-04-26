@@ -73,8 +73,24 @@ function get_drush_command() {
       'variable-name' => 'aliases',
       'hide-empty-fields' => TRUE,
       'private-fields' => 'password',
-      'field-labels' => array('#name' => 'Name', 'root' => 'Root', 'uri' => 'URI', 'remote-host' => 'Host', 'remote-user' => 'User', 'remote-port' => 'Port', 'os' => 'OS', 'ssh-options' => 'SSH options', 'php' => 'PHP'),
-      'fields-default' => array('#name', 'root', 'uri', 'remote-host', 'remote-user'),
+      'field-labels' => array(
+        '#name' => 'Name',
+        'root' => 'Root',
+        'uri' => 'URI',
+        'remote-host' => 'Host',
+        'remote-user' => 'User',
+        'remote-port' => 'Port',
+        'os' => 'OS',
+        'ssh-options' => 'SSH options',
+        'php' => 'PHP'
+      ),
+      'fields-default' => array(
+        '#name',
+        'root',
+        'uri',
+        'remote-host',
+        'remote-user'
+      ),
       'field-mappings' => array('name' => '#name'),
       'output-data-type' => 'format-table',
     ),
@@ -96,28 +112,28 @@ function get_drush_command() {
       'example-value' => '@dev.projectname.sharedserver',
     ),
     'options' => $options + array(
-      'make-url' => array(
-        'description' => dt('The location of a makefile that defines this project. drush-make will be run to build this project to set up the platform. If not provided, the source site may be inspected to deduce this.'),
-        'example-value' => 'http://cgit.drupalcode.org/projectname/tree/projectname.make',
-      ),
-      'git-url' => array(
-        'description' => dt('The git URL of the project. Code will be copied from there to set up the site platform. If not provided, the source site may be inspected to deduce this.'),
-        'example-value' => 'git@git.company.com:projectname/website-d7.git',
-      ),
-      'force' => array(
-        'description' => dt('Continue with the next stages even if a previous stage fails. Discrepancies in server drush versions can introduce false positives that need to be ignored.'),
-        'aliases' => array('f'),
-      ),
-      'project-name' => array(
-        'description' => dt('Project name to use when getting. Used for naming the project folder (/var/www/{projectname}/mirror) and local site (http://mirror.{projectname}.local/).'),
-        'example-value' => 'myproject',
-      ),
-      'instance' => array(
-        'example-value' => 'devcopy',
-        'description' => dt('Instance name to use when getting. Used for naming the project folder (/var/www/projectname/{instance}) and local site (http://{instance}.projectname.local/) and database. Defaults to "mirror" or is influenced by the patterns.'),
+        'make-url' => array(
+          'description' => dt('The location of a makefile that defines this project. drush-make will be run to build this project to set up the platform. If not provided, the source site may be inspected to deduce this.'),
+          'example-value' => 'http://cgit.drupalcode.org/projectname/tree/projectname.make',
+        ),
+        'git-url' => array(
+          'description' => dt('The git URL of the project. Code will be copied from there to set up the site platform. If not provided, the source site may be inspected to deduce this.'),
+          'example-value' => 'git@git.company.com:projectname/website-d7.git',
+        ),
+        'force' => array(
+          'description' => dt('Continue with the next stages even if a previous stage fails. Discrepancies in server drush versions can introduce false positives that need to be ignored.'),
+          'aliases' => array('f'),
+        ),
+        'project-name' => array(
+          'description' => dt('Project name to use when getting. Used for naming the project folder (/var/www/{projectname}/mirror) and local site (http://mirror.{projectname}.local/).'),
+          'example-value' => 'myproject',
+        ),
+        'instance' => array(
+          'example-value' => 'devcopy',
+          'description' => dt('Instance name to use when getting. Used for naming the project folder (/var/www/projectname/{instance}) and local site (http://{instance}.projectname.local/) and database. Defaults to "mirror" or is influenced by the patterns.'),
 
+        ),
       ),
-    ),
     'examples' => array(
       'drush get @projectname.uat.preview' => dt('Copy the named site to your local dev environment. Most local parameters will be defaulted.'),
     ),
@@ -207,8 +223,7 @@ function drush_get_setup() {
   $su_sql = drush_sql_get_class($db_spec);
   try {
     $su_sql->drop_or_create();
-  }
-  catch (Error $e) {
+  } catch (Error $e) {
     return drush_set_error(dt('Failed to create database: @error', array('@error' => $e->getMessage())));
   }
   drush_log(dt('Looks like we had the ability to make databases.'), 'success');
@@ -224,8 +239,7 @@ function drush_get_setup() {
   try {
     // $sql->query(sprintf('DROP TABLE IF EXISTS %s;', 'deleteme'));.
     $success = $sql->query(sprintf('CREATE TABLE %s (id INT);', 'deleteme'));
-  }
-  catch (Error $e) {
+  } catch (Error $e) {
     return drush_set_error(dt('Failed to create table in database: @error', array('@error' => $e->getMessage())));
   }
 
@@ -601,242 +615,263 @@ function drush_get_site() {
     drush_log(dt('No site given', $strings), 'warning');
     return NULL;
   }
-  $force = drush_get_option('force', FALSE);
 
   foreach ($site_list as $source_site_alias) {
-    $strings['@source_site_alias'] = $source_site_alias;
-    drush_log(dt("Attempting to fetch @source_site_alias", $strings), 'info');
-    // $site_id will be the @site.alias .
-    $source_site_spec = drush_sitealias_get_record($source_site_alias);
-    if (empty($source_site_spec)) {
-      drush_log(dt('Could not find a site-alias entry for @source_site_alias . Check the ID, or try "drush get-whois -v @source_site_alias" for more details.', $strings), 'error');
-      continue;
+    drush_get_single_site($source_site_alias);
+  }
+}
+
+function drush_get_single_site($source_site_alias) {
+  $force = drush_get_option('force', FALSE);
+
+  $strings['@source_site_alias'] = $source_site_alias;
+  drush_log(dt("Attempting to fetch @source_site_alias", $strings), 'info');
+
+  $source_site_spec = drush_sitealias_get_record($source_site_alias);
+  if (empty($source_site_spec)) {
+    drush_log(dt('Could not find a site-alias entry for @source_site_alias . Check the ID, or try "drush get-whois -v @source_site_alias" for more details.', $strings), 'error');
+    return;
+  }
+  $strings['@source_root'] = $source_site_spec['root'];
+  $strings['@remote-host'] = $source_site_spec['remote-host'];
+  drush_log(dt('Info retrieved describing @source_site_alias. It is in @source_root on @remote-host .', $strings), 'success');
+
+  // Sanity-check the remote site.
+  drush_log(dt('Attempting to check status of the source site... You should already have the appropriate connection authentication in place to run "drush @source_site_alias status"', $strings), 'info');
+  $remote_status_request = drush_invoke_process($source_site_alias, 'core-status');
+  $remote_status = $remote_status_request['object'];
+  if ($remote_status['Database'] == 'Connected') {
+    drush_log(dt('Source site database status is connected, so things seem to be working', $strings), 'debug');
+  }
+  else {
+    drush_log(dt('Source site database status is not available, so pulling stuff from there will fail. This problem needs to be fixed before we can continue', $strings), 'error');
+    return;
+  }
+
+  // So far so good.
+  // Now to do :
+  // * Local platform setup, using the get_setup preferences.
+  // * A file-copy down
+  // * Database sync down
+  // * Local status check.
+  $short_name = short_name_from_site_spec($source_site_spec);
+  $strings['@short_name'] = $short_name;
+
+  // Derive the local dev site definition.
+  $local_site_spec = array(
+    'name' => "$short_name",
+    'role' => 'mirror',
+    'path-aliases' => array(),
+  );
+
+  $get_uri_pattern = drush_get_option('get-uri-pattern', '%role.%short-name.localhost');
+  $local_uri = drush_get_process_tokens($get_uri_pattern, $local_site_spec);
+  $local_site_spec['uri'] = $local_uri;
+  $strings['@local_uri'] = $local_uri;
+
+  $get_docroot_pattern = drush_get_option('get-docroot-pattern', '/var/www/%short-name/%docroot-name');
+  $local_root = drush_get_process_tokens($get_docroot_pattern, $local_site_spec);
+  $local_site_spec['root'] = $local_root;
+  $strings['@local_root'] = $local_root;
+
+  // A path-based local_root_alias is enough to start doing other processes.
+  // Wierdness happens if this is slightly off
+  // - that slash hash makes a huge difference in whether rsync works!
+  $local_site_alias = "$local_root/#$local_uri";
+  $strings['@local_site_alias'] = $local_site_alias;
+  drush_log(dt("Your downloaded project will have the short_name:@short_name.", $strings), 'ok');
+  drush_log(dt("Locally copied site '@local_uri' will be deployed into '@local_root' .", $strings), 'ok');
+
+  // What will the new db connection be?
+  $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name_$role:%random@127.0.0.1:3306/%short-name_%role');
+  $local_db = db_pattern_from_site_spec($local_site_spec);
+  $strings['@local_db'] = $local_db;
+  drush_log(dt("Locally copied site will be given database '@local_db' .", $strings), 'ok');
+
+  if (!drush_confirm('Do the values above look correct?')) {
+    drush_log(dt("You may want to exit and try again with the --project-name option set. For other options see drush topic docs-get.", $strings), 'ok');
+    return 'Exiting';
+  }
+
+  // Initiate rsync of the remote real site (ignore VCS , get the real thing).
+  $rsync_args = array(
+    $source_site_alias,
+    $local_site_alias,
+  );
+  $rsync_options = array(
+    // If I define exclude-paths here,
+    // it seems to override the site-alias ones.
+    // '--exclude-paths=backup_migrate'.
+    // In order to speed up bootstrapping, exclude files folders during
+    // this phase of mirroring.
+    '--exclude-files',
+    // However, --exclude-files will not exclude files found in OTHER
+    // multisite dirs, or may pull down symlinked folders.
+    '--exclude-other-sites',
+    // exclude-other-sites leaves 'default' behind,
+    // leaving us with no default.settings?
+    '--include-paths=sites/default'
+    // '--exclude-sites'.
+  );
+
+  // @TODO --exclude-files did not work in all cases ...
+  // I got all (4G) user files downloaded last time.
+  // Investigate. (and log better)
+
+  drush_log(dt("About to rsync MOST FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already been excluded via the source sites site-alias settings.", $strings), 'ok');
+  if (!drush_mkdir($local_root, TRUE)) {
+    drush_log(dt("Could not prepare local root directory @local_root to copy into. Probably permissions.", $strings), 'error');
+    if (!$force) {
+      drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
+      return;
     }
-    $strings['@root'] = $source_site_spec['root'];
-    $strings['@remote-host'] = $source_site_spec['remote-host'];
-    drush_log(dt('Info retrieved describing @source_site_alias. It is in @root on @remote-host .', $strings), 'success');
+  }
 
-    // So far so good.
-    // Now to do :
-    // * Local platform setup, using the get_setup preferences.
-    // * A file-copy down
-    // * Database sync down
-    // * Local status check.
-    $short_name = short_name_from_site_spec($source_site_spec);
-    $strings['@short_name'] = $short_name;
+  // Recent version of drush stopped assuming yes when dispatching
+  // and defaulted to no??
+  // I traced it for a day, but it's hairy.
+  // The default backend_options...
+  $backend_options = TRUE;
+  // Mean that things get skipped unless we
+  // either force a yes,
+  // (first Save the current state:)
+  $affirmative = drush_get_context('DRUSH_AFFIRMATIVE');
+  // drush_set_context(DRUSH_AFFIRMATIVE, TRUE);
+  // ..or leave it interactive.
+  $backend_options = array('interactive' => TRUE);
+  // HOWEVER, interactive sometimes fails to register what's happening
+  // over a tunnel (dunno why)
+  // Run the proc.
+  drush_log(print_r([
+    'command' => 'rsync',
+    'args' => $rsync_args,
+    'options' => $rsync_options,
+    'backend' => $backend_options
+  ], 1), 'debug');
+  $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
 
-    // Derive the local dev site definition.
-    $local_site_spec = array(
-      'name' => "$short_name",
-      'role' => 'mirror',
-      'path-aliases' => array(),
-    );
+  print_r($rsynced_success);
 
-    $get_uri_pattern = drush_get_option('get-uri-pattern', '%role.%short-name.localhost');
-    $local_uri = drush_get_process_tokens($get_uri_pattern, $local_site_spec);
-    $local_site_spec['uri'] = $local_uri;
-    $strings['@local_uri'] = $local_uri;
-
-    $get_docroot_pattern = drush_get_option('get-docroot-pattern', '/var/www/%short-name/%docroot-name');
-    $local_root = drush_get_process_tokens($get_docroot_pattern, $local_site_spec);
-    $local_site_spec['root'] = $local_root;
-    $strings['@local_root'] = $local_root;
-
-    // A path-based local_root_alias is enough to start doing other processes.
-    // Wierdness happens if this is slightly off
-    // - that slash hash makes a huge difference in whether rsync works!
-    $local_site_alias = "$local_root/#$local_uri";
-    $strings['@local_site_alias'] = $local_site_alias;
-    drush_log(dt("Your downloaded project will have the short_name:@short_name.", $strings), 'ok');
-    drush_log(dt("Locally copied site '@local_uri' will be deployed into '@local_root' .", $strings), 'ok');
-
-    // What will the new db connection be?
-    $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name_$role:%random@127.0.0.1:3306/%short-name_%role');
-    $local_db = db_pattern_from_site_spec($local_site_spec);
-    $strings['@local_db'] = $local_db;
-    drush_log(dt("Locally copied site will be given database '@local_db' .", $strings), 'ok');
-
-    if (!drush_confirm('Do the values above look correct?')) {
-      drush_log(dt("You may want to exit and try again with the --project-name option set. For other options see drush topic docs-get.", $strings), 'ok');
-      return 'Exiting';
-    }
-
-      // Initiate rsync of the remote real site (ignore VCS , get the real thing).
-    $rsync_args = array(
-      $source_site_alias,
-      $local_site_alias,
-    );
-    $rsync_options = array(
-      // If I define exclude-paths here,
-      // it seems to override the site-alias ones.
-      // '--exclude-paths=backup_migrate'.
-      // In order to speed up bootstrapping, exclude files folders during
-      // this phase of mirroring.
-      '--exclude-files',
-      // However, --exclude-files will not exclude files found in OTHER
-      // multisite dirs, or may pull down symlinked folders.
-      '--exclude-other-sites',
-      // exclude-other-sites leaves 'default' behind,
-      // leaving us with no default.settings?
-      '--include-paths=sites/default'
-      // '--exclude-sites'.
-    );
-
-    // @TODO --exclude-files did not work in all cases ...
-    // I got all (4G) user files downloaded last time.
-    // Investigate. (and log better)
-
-    drush_log(dt("About to rsync MOST FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already been excluded via the source sites site-alias settings.", $strings), 'ok');
-    if (!drush_mkdir($local_root, TRUE)) {
-      drush_log(dt("Could not prepare local root directory @local_root to copy into. Probably permissions.", $strings), 'error');
-      if (!$force) {
-        drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
-        continue;
-      }
-    }
-
-    // Recent version of drush stopped assuming yes when dispatching
-    // and defaulted to no??
-    // I traced it for a day, but it's hairy.
-    // The default backend_options...
-    $backend_options = TRUE;
-    // Mean that things get skipped unless we
-    // either force a yes,
-    // (first Save the current state:)
-    $affirmative = drush_get_context('DRUSH_AFFIRMATIVE');
-    // drush_set_context(DRUSH_AFFIRMATIVE, TRUE);
-    // ..or leave it interactive.
-    $backend_options = array('interactive' => TRUE);
-    // HOWEVER, interactive sometimes fails to register what's happening
-    // over a tunnel (dunno why)
-    // Run the proc.
-    drush_log(print_r(['command' => 'rsync', 'args' => $rsync_args, 'options' => $rsync_options, 'backend' => $backend_options], 1), 'debug');
-    $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
-
-    print_r($rsynced_success);
-
-    if ($rsynced_success && !$rsynced_success['error_status']) {
-      // TODO - more checking - seems possible to get a success flagged,
-      // but no actual files. Do you really want to continue? (y/n): Cancelled.
-      drush_log(dt("Completed rsync site files from @source_site_alias to @local_site_alias. We now have a platform to build on.", $strings), 'success');
-    }
-    else {
-      if ($rsynced_success['error_status']) {
-        if (!empty($rsynced_success['error_log'])) {
-          foreach ($rsynced_success['error_log'] as $log) {
-            drush_log($log, 'error');
-          }
-        }
-        else {
-          drush_log('Unknown error returned from rsync attempt', 'error');
+  if ($rsynced_success && !$rsynced_success['error_status']) {
+    // TODO - more checking - seems possible to get a success flagged,
+    // but no actual files. Do you really want to continue? (y/n): Cancelled.
+    drush_log(dt("Completed rsync site files from @source_site_alias to @local_site_alias. We now have a platform to build on.", $strings), 'success');
+  }
+  else {
+    if ($rsynced_success['error_status']) {
+      if (!empty($rsynced_success['error_log'])) {
+        foreach ($rsynced_success['error_log'] as $log) {
+          drush_log($log, 'error');
         }
       }
       else {
-        drush_log(dt("Rsync result was FALSE, yet no error status reported. This may happen when tunneling or other things are happening..", $strings), 'error');
+        drush_log('Unknown error returned from rsync attempt', 'error');
       }
-      // If the alleged failure was a false negative, Bowl on regardless.
-      // Don't abort I guess.
-      // TODO: pause and ask about Abort/Retry/Ignore.
-      if (!$force) {
-        drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
-        // continue;.
-      }
-    }
-
-    // Now initialize a site directory in the new platform.
-
-    $site_install_args = array();
-    // If we want to continue emulating multisites locally, set sites-subdir.
-    // This is useful to identify assumptions about hard-coded paths etc,
-    // and will maintain aegir like setups BUT things remain tricky.
-    // If we choose not to do that, and fall back to 'default', many shortcuts
-    // remain easier.
-    //
-    // If using a multisite named sites dir,
-    // drush runserver does not cooperate with multisite without help.
-    // Current work-arounds are to copy the settings into default
-    // (which is not quite right as it fudges it)
-    // or edit sites.php to redirect 'default' => $local_uri
-    // which is more official.
-    $sites_subdir = $local_uri;
-    $sites_subdir = 'default';
-    $strings['%sites_subdir'] = $sites_subdir;
-    $site_install_options = array(
-      "--db-url=${local_db}",
-      "--sites-subdir=${sites_subdir}",
-    );
-
-    // Adjust local file storage rules.
-    configure_site_settings($local_root, $sites_subdir);
-
-    // When running drush_invoke_process, we may find ourselves running
-    // a totally different version of drush!
-    // Site instances may have a local drush - of a difference version even.
-    // That forks into a cli process and everything.
-    //
-    // I actually do NOT want the full site-install,
-    // But it's hella easier that just trying to invoke just the needed
-    // database creation part of it.
-    // I really just wanted drush_core_pre_site_install().
-    drush_log(dt("About to initialize the site directory '%sites_subdir' and a new database.", $strings), 'ok');
-    $site_install_success = drush_invoke_process($local_site_alias, 'site-install', $site_install_args, $site_install_options, $backend_options);
-
-    if ($site_install_success) {
-      drush_log(dt("Site Install seems to have been a success.", $strings), 'success');
-      drush_log(dt("You can probably run `drush @local_site_alias runserver --uri=@local_uri /` and see it working. (Currently empty, DB to come)", $strings), 'ok');
     }
     else {
-      drush_log(dt("Site Install seems to have failed.", $strings), 'error');
-      print_r($site_install_success);
-      $strings['@command'] = "drush $local_site_alias site-install " . implode(' ', $site_install_args) . ' ' . implode(' ', $site_install_options);
-      drush_log(dt("You'll have to investigate why a command like\n  @command\n failed.", $strings), 'error');
-      drush_log(dt("Depending where site-install failed, you should probably DROP the %local_db database before trying again.", $strings), 'error');
-      if (!$force) {
-        drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
-        continue;
-      }
+      drush_log(dt("Rsync result was FALSE, yet no error status reported. This may happen when tunneling or other things are happening..", $strings), 'error');
     }
-
-    // Almost there - just the database sync left.
-    $sql_sync_args = array(
-      $source_site_alias,
-      $local_site_alias,
-    );
-    $sql_sync_options = array();
-    drush_log(dt("About to sync the remote database down. This usually takes time. Effectively running `drush sql-sync @source_site_alias @local_site_alias'", $strings), 'ok');
-    $sql_synced_success = drush_invoke_process('@self', 'sql-sync', $sql_sync_args, $sql_sync_options, $backend_options);
-    print_r($sql_synced_success);
-    if ($sql_synced_success) {
-      drush_log(dt("Completed sql-sync site DB from @source_site_alias to @local_site_alias. We now have a ready-to-run site.", $strings), 'success');
+    // If the alleged failure was a false negative, Bowl on regardless.
+    // Don't abort I guess.
+    // TODO: pause and ask about Abort/Retry/Ignore.
+    if (!$force) {
+      drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
+      return;
     }
-    else {
-      drush_log(dt("Failed to sql-sync site DB from @source_site_alias to @local_site_alias. This feels like a problem, so exiting", $strings), 'error');
-      if (!$force) {
-        drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
-        continue;
-      }
+  }
+
+  // Now initialize a site directory in the new platform.
+
+  $site_install_args = array();
+  // If we want to continue emulating multisites locally, set sites-subdir.
+  // This is useful to identify assumptions about hard-coded paths etc,
+  // and will maintain aegir like setups BUT things remain tricky.
+  // If we choose not to do that, and fall back to 'default', many shortcuts
+  // remain easier.
+  //
+  // If using a multisite named sites dir,
+  // drush runserver does not cooperate with multisite without help.
+  // Current work-arounds are to copy the settings into default
+  // (which is not quite right as it fudges it)
+  // or edit sites.php to redirect 'default' => $local_uri
+  // which is more official.
+  $sites_subdir = $local_uri;
+  $sites_subdir = 'default';
+  $strings['%sites_subdir'] = $sites_subdir;
+  $site_install_options = array(
+    "--db-url=${local_db}",
+    "--sites-subdir=${sites_subdir}",
+  );
+
+  // Adjust local file storage rules.
+  configure_site_settings($local_root, $sites_subdir);
+
+  // When running drush_invoke_process, we may find ourselves running
+  // a totally different version of drush!
+  // Site instances may have a local drush - of a difference version even.
+  // That forks into a cli process and everything.
+  //
+  // I actually do NOT want the full site-install,
+  // But it's hella easier that just trying to invoke just the needed
+  // database creation part of it.
+  // I really just wanted drush_core_pre_site_install().
+  drush_log(dt("About to initialize the site directory '%sites_subdir' and a new database.", $strings), 'ok');
+  $site_install_success = drush_invoke_process($local_site_alias, 'site-install', $site_install_args, $site_install_options, $backend_options);
+
+  if ($site_install_success) {
+    drush_log(dt("Site Install seems to have been a success.", $strings), 'success');
+    drush_log(dt("You can probably run `drush @local_site_alias runserver --uri=@local_uri /` and see it working. (Currently empty, DB to come)", $strings), 'ok');
+  }
+  else {
+    drush_log(dt("Site Install seems to have failed.", $strings), 'error');
+    print_r($site_install_success);
+    $strings['@command'] = "drush $local_site_alias site-install " . implode(' ', $site_install_args) . ' ' . implode(' ', $site_install_options);
+    drush_log(dt("You'll have to investigate why a command like\n  @command\n failed.", $strings), 'error');
+    drush_log(dt("Depending where site-install failed, you should probably DROP the %local_db database before trying again.", $strings), 'error');
+    if (!$force) {
+      drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
+      return;
     }
+  }
 
-    // As a developer shortcut, note the site identifier as a text file
-    // in the project root.
-    // We can use this to avoid too much typing or remembering things.
-    $shorthand_filepath = dirname($local_root) . DIRECTORY_SEPARATOR . $local_site_spec['role'] . '.txt';
-    if (is_writable($shorthand_filepath)) {
-      file_put_contents($shorthand_filepath, $local_site_alias);
+  // Almost there - just the database sync left.
+  $sql_sync_args = array(
+    $source_site_alias,
+    $local_site_alias,
+  );
+  $sql_sync_options = array();
+  drush_log(dt("About to sync the remote database down. This usually takes time. Effectively running `drush sql-sync @source_site_alias @local_site_alias'", $strings), 'ok');
+  $sql_synced_success = drush_invoke_process('@self', 'sql-sync', $sql_sync_args, $sql_sync_options, $backend_options);
+  print_r($sql_synced_success);
+  if ($sql_synced_success) {
+    drush_log(dt("Completed sql-sync site DB from @source_site_alias to @local_site_alias. We now have a ready-to-run site.", $strings), 'success');
+  }
+  else {
+    drush_log(dt("Failed to sql-sync site DB from @source_site_alias to @local_site_alias. This feels like a problem, so exiting", $strings), 'error');
+    if (!$force) {
+      drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
+      return;
     }
+  }
 
-    // Reset the yes/no state so it doesn't mess up other logic.
-    drush_set_context('DRUSH_AFFIRMATIVE', $affirmative);
+  // As a developer shortcut, note the site identifier as a text file
+  // in the project root.
+  // We can use this to avoid too much typing or remembering things.
+  $shorthand_filepath = dirname($local_root) . DIRECTORY_SEPARATOR . $local_site_spec['role'] . '.txt';
+  if (is_writable($shorthand_filepath)) {
+    file_put_contents($shorthand_filepath, $local_site_alias);
+  }
 
-    drush_print(dt("#########"));
-    drush_print(dt("You can probably run the site now, by invoking: \n  drush @local_site_alias runserver --uri=@local_uri /", $strings));
-    drush_print(dt("#########"));
-    if (drush_confirm('Do you want to run the server now?')) {
-      $runserver_success = drush_invoke_process($local_site_alias, 'runserver', ['/'], ['--uri=' . $local_uri]);
-      $strings['%runserver_success'] = $runserver_success;
-      drush_print(dt("Ran stand-alone web server %runserver_success", $strings));
-    }
+  // Reset the yes/no state so it doesn't mess up other logic.
+  drush_set_context('DRUSH_AFFIRMATIVE', $affirmative);
 
+  drush_print(dt("#########"));
+  drush_print(dt("You can probably run the site now, by invoking: \n  drush @local_site_alias runserver --uri=@local_uri /", $strings));
+  drush_print(dt("#########"));
+  if (drush_confirm('Do you want to run the server now?')) {
+    $runserver_success = drush_invoke_process($local_site_alias, 'runserver', ['/'], ['--uri=' . $local_uri]);
+    $strings['%runserver_success'] = $runserver_success;
+    drush_print(dt("Ran stand-alone web server %runserver_success", $strings));
   }
 
 }
@@ -867,7 +902,14 @@ function short_name_from_site_spec($site_spec) {
   // dev_branch.myproject.server.tld
   // 20170707.myproject.server.tld.
   $name_parts = explode('.', $site_spec['#name']);
-  if (in_array($name_parts[0], array('www', 'dev', 'live', 'test', 'uat', 'prod'))) {
+  if (in_array($name_parts[0], array(
+    'www',
+    'dev',
+    'live',
+    'test',
+    'uat',
+    'prod'
+  ))) {
     array_shift($name_parts);
   }
   $short_name = array_shift($name_parts);
@@ -891,7 +933,7 @@ function db_pattern_from_site_spec($site_spec) {
   return $db_url;
 }
 
-function configure_site_settings($local_root, $sites_subdir='default'){
+function configure_site_settings($local_root, $sites_subdir = 'default') {
   // It's often necessary to set up some local settings overrides
   // on a local copy.
   // D7 style file path overrides.
@@ -926,7 +968,7 @@ function configure_site_settings($local_root, $sites_subdir='default'){
     "sites/${sites_subdir}/private/files",
     "sites/${sites_subdir}/private/temp",
   ];
-  foreach($dirs as $dir) {
+  foreach ($dirs as $dir) {
     if (!is_dir("${local_root}/$dir")) {
       mkdir("${local_root}/$dir");
     }

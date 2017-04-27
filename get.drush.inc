@@ -120,10 +120,6 @@ function get_drush_command() {
           'description' => dt('The git URL of the project. Code will be copied from there to set up the site platform. If not provided, the source site may be inspected to deduce this.'),
           'example-value' => 'git@git.company.com:projectname/website-d7.git',
         ),
-        'force' => array(
-          'description' => dt('Continue with the next stages even if a previous stage fails. Discrepancies in server drush versions can introduce false positives that need to be ignored.'),
-          'aliases' => array('f'),
-        ),
         'project-name' => array(
           'description' => dt('Project name to use when getting. Used for naming the project folder (/var/www/{projectname}/mirror) and local site (http://mirror.{projectname}.local/).'),
           'example-value' => 'myproject',
@@ -237,7 +233,7 @@ function drush_get_setup() {
   $sql = drush_sql_get_class($db_spec);
   $success = FALSE;
   try {
-    // $sql->query(sprintf('DROP TABLE IF EXISTS %s;', 'deleteme'));.
+    $sql->query(sprintf('DROP TABLE IF EXISTS %s;', 'deleteme'));
     $success = $sql->query(sprintf('CREATE TABLE %s (id INT);', 'deleteme'));
   } catch (Error $e) {
     return drush_set_error(dt('Failed to create table in database: @error', array('@error' => $e->getMessage())));
@@ -624,10 +620,18 @@ function drush_get_site() {
 /**
  * Performs 'get' on a single site.
  *
+ * This function verbosely wraps a series of drush steps.
+ * Almost everything we do could be done by a crafted series of drush calls.
+ * This just adds the craft and the error handling.
+ * Where possible, the steps are performed in separate functions, while
+ * this one just ties them all together.
+ *
  * @param $source_site_alias
  */
 function drush_get_single_site($source_site_alias) {
-  $force = drush_get_option('force', FALSE);
+  // Sometimes we override the drush '--yes' flag temporarily.
+  $affirmative = drush_get_context('DRUSH_AFFIRMATIVE');
+
 
   $strings['@source_site_alias'] = $source_site_alias;
   drush_log(dt("Attempting to fetch @source_site_alias", $strings), 'info');
@@ -642,7 +646,7 @@ function drush_get_single_site($source_site_alias) {
   $strings['@remote-host'] = $source_site_spec['remote-host'];
   drush_log(dt('Info retrieved describing @source_site_alias. It is in @source_root on @remote-host .', $strings), 'success');
 
-  if (! drush_get_remote_status($source_site_alias)) {
+  if (!drush_get_remote_status($source_site_alias)) {
     drush_log(dt('Remote site cannot be worked with.', $strings), 'fail');
     return FALSE;
   }
@@ -677,29 +681,11 @@ function drush_get_single_site($source_site_alias) {
   // Wierdness happens if this is slightly off
   // - that slash hash makes a huge difference in whether rsync works!
   $local_site_alias = "$local_root/#$local_uri";
+  $local_site_spec['alias'] = $local_site_alias;
   $strings['@local_site_alias'] = $local_site_alias;
   drush_log(dt("Your downloaded project will have the short_name:@short_name.", $strings), 'ok');
   drush_log(dt("Locally copied site '@local_uri' will be deployed into '@local_root' .", $strings), 'ok');
 
-  // What will the new db connection be?
-  $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name_$role:%random@127.0.0.1:3306/%short-name_%role');
-  $local_db = db_pattern_from_site_spec($local_site_spec);
-  $strings['@local_db'] = $local_db;
-  drush_log(dt("Locally copied site will be given database '@local_db' .", $strings), 'ok');
-
-  if (!drush_confirm('Do the values above look correct?')) {
-    drush_log(dt("You may want to exit and try again with the --project-name option set. For other options see drush topic docs-get.", $strings), 'ok');
-    return 'Exiting';
-  }
-
-  if (! drush_get_codebase($source_site_alias, $local_site_alias, $local_root)) {
-    drush_log(dt('Codebase download failed.', $strings), 'fail');
-    return FALSE;
-  }
-
-  // Now initialize a site directory in the new platform.
-
-  $site_install_args = array();
   // If we want to continue emulating multisites locally, set sites-subdir.
   // This is useful to identify assumptions about hard-coded paths etc,
   // and will maintain aegir like setups BUT things remain tricky.
@@ -712,90 +698,48 @@ function drush_get_single_site($source_site_alias) {
   // (which is not quite right as it fudges it)
   // or edit sites.php to redirect 'default' => $local_uri
   // which is more official.
-  $sites_subdir = $local_uri;
+  $sites_subdir = $site_spec['uri'];
   $sites_subdir = 'default';
-  $strings['%sites_subdir'] = $sites_subdir;
-  $site_install_options = array(
-    "--db-url=${local_db}",
-    "--sites-subdir=${sites_subdir}",
-  );
-  $backend_options = array('interactive' => TRUE);
+  $local_site_spec['path-aliases']['%site'] = "sites/${sites_subdir}";
+  $strings['%sites_subdir'] = "sites/${sites_subdir}";
 
-  // Adjust local file storage rules.
-  configure_site_settings($local_root, $sites_subdir);
+  // What will the new db connection be?
+  $local_db = db_pattern_from_site_spec($local_site_spec);
+  $local_site_spec['db-url'] = $local_db;
+  $strings['@local_db'] = $local_db;
+  drush_log(dt("Locally copied site will be given database '@local_db' .", $strings), 'ok');
 
-  // When running drush_invoke_process, we may find ourselves running
-  // a totally different version of drush!
-  // Site instances may have a local drush - of a difference version even.
-  // That forks into a cli process and everything.
-  //
-  // I actually do NOT want the full site-install,
-  // But it's hella easier that just trying to invoke just the needed
-  // database creation part of it.
-  // I really just wanted drush_core_pre_site_install().
-  drush_log(dt("About to initialize the site directory '%sites_subdir' and a new database.", $strings), 'ok');
-  $site_install_result = drush_invoke_process($local_site_alias, 'site-install', $site_install_args, $site_install_options, $backend_options);
-
-  // This may return a response array.
-  $site_install_success = !$site_install_result['error_status'];
-
-  if ($site_install_success) {
-    drush_log(dt("Site Install seems to have been a success.", $strings), 'success');
-    drush_log(dt("You can probably run `drush @local_site_alias runserver --uri=@local_uri /` and see it working. (Currently empty, DB to come)", $strings), 'ok');
-  }
-  else {
-    drush_log(dt("Site Install seems to have failed.", $strings), 'error');
-    print_r($site_install_result);
-    $strings['@command'] = "drush $local_site_alias site-install " . implode(' ', $site_install_args) . ' ' . implode(' ', $site_install_options);
-    drush_log(dt("You'll have to investigate why a command like\n  @command\n failed.", $strings), 'error');
-    drush_log(dt("One reason can be file permissions on settings.php when downloading over an existing site.", $strings), 'noticeß');
-    drush_log(dt("Depending where site-install failed, you should probably DROP the %local_db database before trying again.", $strings), 'error');
-    if (!drush_confirm("Do you want to continue anyway?")) {
-      return FALSE;
-    }
+  drush_log(var_export($local_site_spec, 1), 'info');
+  if (!drush_confirm('Do the values above look correct?')) {
+    drush_log(dt("You may want to exit and try again with the --project-name option set. For other options see drush topic docs-get.", $strings), 'ok');
+    return 'Exiting';
   }
 
-  // Almost there - the database sync next.
-  $sql_sync_args = array(
-    $source_site_alias,
-    $local_site_alias,
-  );
-  $sql_sync_options = array();
-  drush_log(dt("About to sync the remote database down. This usually takes time. Effectively running `drush sql-sync @source_site_alias @local_site_alias'", $strings), 'ok');
-  drush_log(dt("You can skip the sql-sync if you are planning to replace the databse later in another way.", $strings), 'ok');
-  $sql_synced_result = drush_invoke_process('@self', 'sql-sync', $sql_sync_args, $sql_sync_options, $backend_options);
-
-  $sql_synced_success = empty($sql_synced_result['error_status']);
-  if ($sql_synced_success) {
-    drush_log(dt("Completed sql-sync site DB from @source_site_alias to @local_site_alias. We now have a ready-to-run site.", $strings), 'success');
-  }
-  else {
-    drush_log(dt("Failed to sql-sync site DB from @source_site_alias to @local_site_alias. This feels like a problem, so exiting", $strings), 'error');
-    print_r($sql_synced_success);
-    if (!drush_confirm("Do you want to continue anyway?")) {
-      return FALSE;
-    }
+  // BEGIN
+  // FETCH CODEBASE
+  if (!drush_get_codebase($source_site_alias, $local_site_alias, $local_root)) {
+    drush_log(dt('Codebase download failed.', $strings), 'fail');
+    return FALSE;
   }
 
-  // Optionally fetch the rest of the site user files.
-  drush_print(dt("We previously avoided downloading the user files, as they can often be slow."));
-  drush_print(dt("For a development mirror, you can often do without these, or use stage_file_proxy instead."));
-  if (drush_confirm('Do you want to rsync the user files now?')) {
-    $backend_options = array('interactive' => TRUE);
-    $rsync_args = array(
-      $source_site_alias . ':%files',
-      $local_site_alias . ':%files',
-    );
-    $rsync_options = array(
-      '--exclude-paths=backup_migrate,simpletest,styles',
-    );
-    drush_log(print_r([
-      'command' => 'rsync',
-      'args' => $rsync_args,
-      'options' => $rsync_options,
-      'backend' => $backend_options
-    ], 1), 'debug');
-    $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
+  // SITE INSTALL
+  // Now initialize a site directory in the new platform.
+  // The site we install will be redundant, but the process of installing a
+  // site is expected to do a lot of housekeeping.
+  if (!drush_get_site_setup($local_site_spec)) {
+    drush_log(dt('Site install failed.', $strings), 'fail');
+    return FALSE;
+  }
+
+  // DATABASE
+  if (!drush_get_database($source_site_alias, $local_site_alias)) {
+    drush_log(dt('Database sync failed.', $strings), 'fail');
+    return FALSE;
+  }
+
+  if (!drush_get_user_files($source_site_alias, $local_site_alias)) {
+    drush_log(dt('File sync failed.', $strings), 'fail');
+    return FALSE;
   }
 
   // As a developer shortcut, note the site identifier as a text file
@@ -838,8 +782,8 @@ function drush_get_remote_status($source_site_alias) {
   // Status response is different on older drush. Deal with anything we can.
   // 'Drupal bootstrap' drush 7
   $remote_bootstrapped = isset($remote_status['bootstrap']) ?
-    $remote_status['bootstrap'] : ( isset($remote_status['Database']) ?
-      $remote_status['Database'] : FALSE );
+    $remote_status['bootstrap'] : (isset($remote_status['Database']) ?
+      $remote_status['Database'] : FALSE);
   if ($remote_bootstrapped) {
     drush_log(dt('Source site database status is connected, so things seem to be working', $strings), 'debug');
   }
@@ -848,8 +792,8 @@ function drush_get_remote_status($source_site_alias) {
     return FALSE;
   }
   $remote_drush_version = isset($remote_status['drush-version']) ?
-    $remote_status['drush-version'] : ( isset($remote_status['Drush version']) ?
-      $remote_status['Drush version'] : FALSE );
+    $remote_status['drush-version'] : (isset($remote_status['Drush version']) ?
+      $remote_status['Drush version'] : FALSE);
   $strings['%remote_drush_version'] = $remote_drush_version;
   drush_log(dt('Remote drush version is %remote_drush_version', $strings), 'debug');
   if (floatval($remote_drush_version) < 6) {
@@ -867,20 +811,17 @@ function drush_get_remote_status($source_site_alias) {
  * Initiate download of the remote real site.
  *
  * (ignore VCS , get the real thing).
- * */
+ */
 function drush_get_codebase($source_site_alias, $local_site_alias, $local_root) {
   $strings = array(
     '@source_site_alias' => $source_site_alias,
     '@local_site_alias' => $local_site_alias,
   );
 
-  drush_log(dt("About to rsync MOST FILES from @source_site_alias to @local_site_alias. This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and only excluding content that has already been excluded via the source sites site-alias settings.", $strings), 'ok');
+  drush_log(dt("About to rsync MOST FILES from @source_site_alias to @local_site_alias.\n This is likely to take a while with big sites. This is a raw file copy, mirroring the real site, not using source control, and will exclude content that has already been excluded via the source sites site-alias settings.", $strings), 'info');
   if (!drush_mkdir($local_root, TRUE)) {
     drush_log(dt("Could not prepare local root directory @local_root to copy into. Probably permissions.", $strings), 'error');
-    if (!$force) {
-      drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
-      return;
-    }
+    return FALSE;
   }
 
   $rsync_args = array(
@@ -912,9 +853,6 @@ function drush_get_codebase($source_site_alias, $local_site_alias, $local_root) 
   /*
   // Recent version of drush stopped assuming yes when dispatching
   // and defaulted to no??
-  // I traced it for a day, but it's hairy.
-  // The default backend_options...
-  $backend_options = TRUE;
   // Mean that things get skipped unless we
   // either force a yes,
   // (first Save the current state:)
@@ -933,6 +871,9 @@ function drush_get_codebase($source_site_alias, $local_site_alias, $local_root) 
     'options' => $rsync_options,
     'backend' => $backend_options
   ], 1), 'debug');
+  // The rsync may throw errors due to a premature attempt at bootstrapping
+  // the local site if some broken local version already exists
+  // in the target location.
   $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
 
   if (!$rsynced_success || $rsynced_success['error_status']) {
@@ -961,9 +902,127 @@ function drush_get_codebase($source_site_alias, $local_site_alias, $local_root) 
 }
 
 /**
+ * @param array $site_spec
+ * @return bool
+ */
+function drush_get_site_setup($site_spec) {
+  $alias = $strings['%alias'] = $site_spec['alias'];
+  $subdir = preg_replace('#sites/#', '', $site_spec['path-aliases']['%site']);
+  $strings['%subdir'] = $subdir;
+
+  $site_install_args = array();
+  $site_install_options = array(
+    "--db-url=" . $site_spec['db-url'],
+    "--sites-subdir=" . $subdir,
+  );
+  $backend_options = array('interactive' => TRUE);
+
+  // Adjust local file storage rules and prep local.settings.php.
+  drush_get_configure_site_settings($site_spec);
+
+  // When running drush_invoke_process, we may find ourselves running
+  // a totally different version of drush!
+  // Site instances may have a local drush - of a difference version even.
+  // That forks into a cli process and everything.
+  //
+  // I actually do NOT want the full site-install,
+  // But it's hella easier that just trying to invoke just the needed
+  // database creation part of it.
+  // I really just wanted drush_core_pre_site_install().
+  drush_log(dt("About to initialize the site directory '%subdir' and a new database.", $strings), 'ok');
+  // Needed the $alias drush context to keep site-install happy.
+  $site_install_result = drush_invoke_process($alias, 'site-install', $site_install_args, $site_install_options, $backend_options);
+
+  // This may return a response array.
+  $site_install_success = !$site_install_result['error_status'];
+
+  if ($site_install_success) {
+    drush_log(dt("Site Install seems to have been a success.", $strings), 'success');
+    drush_log(dt("You can probably run `drush %alias runserver --uri=@local_uri /` and see it working. (Currently empty, DB to come)", $strings), 'ok');
+  }
+  else {
+    drush_log(dt("Site Install seems to have failed.", $strings), 'error');
+    print_r($site_install_result);
+    $strings['@command'] = "drush $alias site-install " . implode(' ', $site_install_args) . ' ' . implode(' ', $site_install_options);
+    drush_log(dt("You'll have to investigate why a command like\n  @command\n failed.", $strings), 'error');
+    drush_log(dt("One reason can be file permissions on settings.php when downloading over an existing site.", $strings), 'notice');
+    drush_log(dt("Depending where site-install failed, you should probably DROP the %local_db database before trying again.", $strings), 'error');
+    if (!drush_confirm("Do you want to continue anyway?")) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+/**
+ * Perform the SQL Downsync
+ *
+ * @param $source_site_alias
+ * @param $local_site_alias
+ * @return bool
+ */
+function drush_get_database($source_site_alias, $local_site_alias) {
+  $sql_sync_args = array(
+    $source_site_alias,
+    $local_site_alias,
+  );
+  $sql_sync_options = array();
+  $backend_options = array('interactive' => TRUE);
+  drush_log(dt("About to sync the remote database down. This usually takes time. Effectively running `drush sql-sync @source_site_alias @local_site_alias'", $strings), 'ok');
+  drush_log(dt("You can skip the sql-sync if you are planning to replace the databse later in another way.", $strings), 'ok');
+  $sql_synced_result = drush_invoke_process('@self', 'sql-sync', $sql_sync_args, $sql_sync_options, $backend_options);
+  $sql_synced_success = empty($sql_synced_result['error_status']);
+  if ($sql_synced_success) {
+    drush_log(dt("Completed sql-sync site DB from @source_site_alias to @local_site_alias. We now have a ready-to-run site.", $strings), 'success');
+  }
+  else {
+    drush_log(dt("Failed to sql-sync site DB from @source_site_alias to @local_site_alias. This feels like a problem, so exiting", $strings), 'error');
+    print_r($sql_synced_success);
+    if (!drush_confirm("Do you want to continue anyway?")) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+/**
+ * Perform the files rsync.
+ *
+ * @param $source_site_alias
+ * @param $local_site_alias
+ * @return bool
+ */
+function drush_get_user_files($source_site_alias, $local_site_alias) {
+  // Optionally fetch the rest of the site user files.
+  drush_print(dt("We previously avoided downloading the user files, as they can often be slow."));
+  drush_print(dt("For a development mirror, you can often do without these, or use stage_file_proxy instead."));
+  if (drush_confirm('Do you want to rsync the user files now?')) {
+    $backend_options = array('interactive' => TRUE);
+    $rsync_args = array(
+      $source_site_alias . ':%files',
+      $local_site_alias . ':%files',
+    );
+    $rsync_options = array(
+      '--exclude-paths=backup_migrate,simpletest,styles',
+    );
+    drush_log(print_r([
+      'command' => 'rsync',
+      'args' => $rsync_args,
+      'options' => $rsync_options,
+      'backend' => $backend_options
+    ], 1), 'debug');
+    $rsynced_result = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
+    // I don't really care about success or failure at this point.
+  }
+  return TRUE;
+}
+
+/**
  * Guess a good shortname/slug.
  *
- * @param $site_spec
+ * @param array $site_spec
+ *
+ * @return string
  */
 function short_name_from_site_spec($site_spec) {
   // The command may have explicitly defined a name to use for our project.
@@ -1001,7 +1060,11 @@ function short_name_from_site_spec($site_spec) {
 }
 
 /**
+ * Calculate a db connection URL
  *
+ * @param array $site_spec
+ *
+ * @return string
  */
 function db_pattern_from_site_spec($site_spec) {
 
@@ -1017,18 +1080,20 @@ function db_pattern_from_site_spec($site_spec) {
   return $db_url;
 }
 
-function configure_site_settings($local_root, $sites_subdir = 'default') {
+function drush_get_configure_site_settings($site_spec) {
+  $root = $site_spec['root'];
+  $site_subdir = $site_spec['path-aliases']['%site'];
   // It's often necessary to set up some local settings overrides
   // on a local copy.
   // D7 style file path overrides.
   $settings_local = "<" . "?" . "php
-    \$conf['file_private_path']   = 'sites/${sites_subdir}/private/files';
-    \$conf['file_public_path']    = 'sites/${sites_subdir}/files';
-    \$conf['file_temporary_path'] = 'sites/${sites_subdir}/private/temp';
+    \$conf['file_private_path']   = '${site_subdir}/private/files';
+    \$conf['file_public_path']    = '${site_subdir}/files';
+    \$conf['file_temporary_path'] = '${site_subdir}/private/temp';
   ";
-  $saved = file_put_contents("${local_root}/sites/${sites_subdir}/settings.local.php", $settings_local);
+  $saved = file_put_contents("${root}/${site_subdir}/settings.local.php", $settings_local);
   if (!$saved) {
-    drush_log('Failed to update /sites/${sites_subdir}/settings.local.php . Sometimes permissions can cause trouble writing to this directory.', 'error');
+    drush_log("Failed to update ${site_subdir}/settings.local.php . Sometimes permissions can cause trouble writing to this directory.", 'error');
   }
   // It's hard to edit the settings file after permissions change,
   // It's easier to edit default.settings and let it get copied
@@ -1039,15 +1104,17 @@ function configure_site_settings($local_root, $sites_subdir = 'default') {
     include_once(__DIR__ . '/settings.local.php');
   }
   ";
-  $saved = file_put_contents("${local_root}/sites/${sites_subdir}/default.settings.php", $use_settings_local, FILE_APPEND);
+  $saved = file_put_contents("${root}/${site_subdir}/default.settings.php", $use_settings_local, FILE_APPEND);
   if (!$saved) {
-    drush_log("Failed to update /sites/${sites_subdir}/default.settings.php . Sometimes permissions can cause trouble writing to this directory.", 'error');
+    drush_log("Failed to update /${site_subdir}/default.settings.php . Sometimes permissions can cause trouble writing to this directory.", 'error');
   }
-  $existing_settings_file = "${local_root}/sites/${sites_subdir}/default.settings.php";
+
+  $existing_settings_file = "${root}/${site_subdir}/settings.php";
   if (file_exists($existing_settings_file)) {
+    drush_log("Need to discard existing $existing_settings_file .", 'notice');
     $deleted = unlink($existing_settings_file);
-    if (! $deleted) {
-      drush_log("Failed to remove previous /sites/${sites_subdir}/settings.php . Sometimes permissions can cause trouble writing to this directory.", 'error');
+    if (file_exists($existing_settings_file)) {
+      drush_log("Failed to remove previous $existing_settings_file . Sometimes permissions can cause trouble writing to this directory.", 'error');
     }
   }
 
@@ -1060,14 +1127,14 @@ function configure_site_settings($local_root, $sites_subdir = 'default') {
   // I thought site-install would have ensured these folders were set up.
   // But maybe not always.
   $dirs = [
-    "sites/${sites_subdir}/files",
-    "sites/${sites_subdir}/private",
-    "sites/${sites_subdir}/private/files",
-    "sites/${sites_subdir}/private/temp",
+    "${site_subdir}/files",
+    "${site_subdir}/private",
+    "${site_subdir}/private/files",
+    "${site_subdir}/private/temp",
   ];
   foreach ($dirs as $dir) {
-    if (!is_dir("${local_root}/$dir")) {
-      mkdir("${local_root}/$dir");
+    if (!is_dir("${root}/$dir")) {
+      mkdir("${root}/$dir");
     }
   }
 }

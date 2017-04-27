@@ -621,6 +621,11 @@ function drush_get_site() {
   }
 }
 
+/**
+ * Performs 'get' on a single site.
+ *
+ * @param $source_site_alias
+ */
 function drush_get_single_site($source_site_alias) {
   $force = drush_get_option('force', FALSE);
 
@@ -632,6 +637,7 @@ function drush_get_single_site($source_site_alias) {
     drush_log(dt('Could not find a site-alias entry for @source_site_alias . Check the ID, or try "drush get-whois -v @source_site_alias" for more details.', $strings), 'error');
     return;
   }
+
   $strings['@source_root'] = $source_site_spec['root'];
   $strings['@remote-host'] = $source_site_spec['remote-host'];
   drush_log(dt('Info retrieved describing @source_site_alias. It is in @source_root on @remote-host .', $strings), 'success');
@@ -640,12 +646,31 @@ function drush_get_single_site($source_site_alias) {
   drush_log(dt('Attempting to check status of the source site... You should already have the appropriate connection authentication in place to run "drush @source_site_alias status"', $strings), 'info');
   $remote_status_request = drush_invoke_process($source_site_alias, 'core-status');
   $remote_status = $remote_status_request['object'];
-  if ($remote_status['Database'] == 'Connected') {
+  // Status response is different on older drush. Deal with anything we can.
+  // 'Drupal bootstrap' drush 7
+  $remote_bootstrapped = isset($remote_status['bootstrap']) ?
+    $remote_status['bootstrap'] : ( isset($remote_status['Database']) ?
+      $remote_status['Database'] : FALSE );
+  if ($remote_bootstrapped) {
     drush_log(dt('Source site database status is connected, so things seem to be working', $strings), 'debug');
   }
   else {
     drush_log(dt('Source site database status is not available, so pulling stuff from there will fail. This problem needs to be fixed before we can continue', $strings), 'error');
     return;
+  }
+
+  $remote_drush_version = isset($remote_status['drush-version']) ?
+    $remote_status['drush-version'] : ( isset($remote_status['Drush version']) ?
+      $remote_status['Drush version'] : FALSE );
+  $strings['%remote_drush_version'] = $remote_drush_version;
+  drush_log(dt('Remote drush version is %remote_drush_version', $strings), 'debug');
+  if (floatval($remote_drush_version) < 6) {
+    // I think it's 6..?
+    $strings['@remote_drush_version'] = $remote_drush_version;
+    drush_log(dt("Remote drush version found on @source_site_alias was '@remote_drush_version' .\n THIS USUALLY LEADS TO SQL-SYNC problems when different versions of drush try to communicate. You should really try to to upgrade the remote drush to at least 6+, but if not, then the final sql-sync will fail, and you'll have to do it in your own way. \nFor more instructions, see drush topic docs-get", $strings), 'warning');
+    if (!drush_confirm('Do you want to continue anyway?')) {
+      return 'Exiting';
+    }
   }
 
   // So far so good.
@@ -702,6 +727,8 @@ function drush_get_single_site($source_site_alias) {
     // If I define exclude-paths here,
     // it seems to override the site-alias ones.
     // '--exclude-paths=backup_migrate'.
+    // Copying around mixed settings files will usually be bad news.
+    '--exclude-conf',
     // In order to speed up bootstrapping, exclude files folders during
     // this phase of mirroring.
     '--exclude-files',
@@ -750,7 +777,7 @@ function drush_get_single_site($source_site_alias) {
   ], 1), 'debug');
   $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
 
-  print_r($rsynced_success);
+  #print_r($rsynced_success);
 
   if ($rsynced_success && !$rsynced_success['error_status']) {
     // TODO - more checking - seems possible to get a success flagged,
@@ -818,13 +845,14 @@ function drush_get_single_site($source_site_alias) {
   drush_log(dt("About to initialize the site directory '%sites_subdir' and a new database.", $strings), 'ok');
   $site_install_success = drush_invoke_process($local_site_alias, 'site-install', $site_install_args, $site_install_options, $backend_options);
 
+  print_r($site_install_success);
+  // This may return a response array.
   if ($site_install_success) {
     drush_log(dt("Site Install seems to have been a success.", $strings), 'success');
     drush_log(dt("You can probably run `drush @local_site_alias runserver --uri=@local_uri /` and see it working. (Currently empty, DB to come)", $strings), 'ok');
   }
   else {
     drush_log(dt("Site Install seems to have failed.", $strings), 'error');
-    print_r($site_install_success);
     $strings['@command'] = "drush $local_site_alias site-install " . implode(' ', $site_install_args) . ' ' . implode(' ', $site_install_options);
     drush_log(dt("You'll have to investigate why a command like\n  @command\n failed.", $strings), 'error');
     drush_log(dt("Depending where site-install failed, you should probably DROP the %local_db database before trying again.", $strings), 'error');
@@ -841,25 +869,50 @@ function drush_get_single_site($source_site_alias) {
   );
   $sql_sync_options = array();
   drush_log(dt("About to sync the remote database down. This usually takes time. Effectively running `drush sql-sync @source_site_alias @local_site_alias'", $strings), 'ok');
-  $sql_synced_success = drush_invoke_process('@self', 'sql-sync', $sql_sync_args, $sql_sync_options, $backend_options);
-  print_r($sql_synced_success);
+  $sql_synced_result = drush_invoke_process('@self', 'sql-sync', $sql_sync_args, $sql_sync_options, $backend_options);
+
+  $sql_synced_success = empty($sql_synced_result['error_status']);
   if ($sql_synced_success) {
     drush_log(dt("Completed sql-sync site DB from @source_site_alias to @local_site_alias. We now have a ready-to-run site.", $strings), 'success');
   }
   else {
     drush_log(dt("Failed to sql-sync site DB from @source_site_alias to @local_site_alias. This feels like a problem, so exiting", $strings), 'error');
+    print_r($sql_synced_success);
     if (!$force) {
       drush_log(dt("Aborting. You may use the --force option to continue anyway", $strings), 'notice');
       return;
     }
   }
 
+  // Optionally fetch the rest of the site user files.
+  drush_print(dt("We avoided downloading the user files, as they can often be slow."));
+  drush_print(dt("For a development mirror, you can often do without these, or use stage_file_proxy instead."));
+  if (drush_confirm('Do you want to rsync the user files now?')) {
+    $backend_options = array('interactive' => TRUE);
+    $rsync_args = array(
+      $source_site_alias . ':%files',
+      $local_site_alias . ':%files',
+    );
+    $rsync_options = array();
+    drush_log(print_r([
+      'command' => 'rsync',
+      'args' => $rsync_args,
+      'options' => $rsync_options,
+      'backend' => $backend_options
+    ], 1), 'debug');
+    $rsynced_success = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
+  }
+
   // As a developer shortcut, note the site identifier as a text file
   // in the project root.
   // We can use this to avoid too much typing or remembering things.
   $shorthand_filepath = dirname($local_root) . DIRECTORY_SEPARATOR . $local_site_spec['role'] . '.txt';
+  $strings['@shorthand_filepath'] = $shorthand_filepath;
   if (is_writable($shorthand_filepath)) {
     file_put_contents($shorthand_filepath, $local_site_alias);
+  }
+  else {
+    drush_log(dt("Did not create the shorthand note into @shorthand_filepath", $strings), 'notice');
   }
 
   // Reset the yes/no state so it doesn't mess up other logic.

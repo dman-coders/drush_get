@@ -186,6 +186,20 @@ A simple static pattern may be
 
 ## Preparing the source
 
+Life is no fun if you have not installed drush remotely first.
+
+sql-sync specifically has difficulty if your local and remote versions
+are too different from each other.
+
+Modern versions of drush require composer and a high amount of access (not to mention PHP versions)
+to work, and that can be prohibitive on legacy sites you are hoping to rescue.
+ 
+[Installing Older Versions of Drush on Shared Hosting Accounts](https://www.drupal.org/node/1181480)
+provides some useful instructions. As suggested there, 
+[drush 6.1.0](https://github.com/drush-ops/drush/archive/6.1.0.tar.gz) as a stand-alone zip
+may be the best bet if you have PHP 5.3.3+.
+Below that, the best you can do is [drush5](https://github.com/drush-ops/drush/archive/5.x.tar.gz) (which requires a download of [PEAR ConsoleTable])(http://pear.php.net/package/Console_Table) also. This may require a manual download [Console_table-1.1.3](http://download.pear.php.net/package/Console_Table-1.1.3.tgz)
+ 
 ### Source site-alias
 
 The source site MUST be defined by a good site-alias.

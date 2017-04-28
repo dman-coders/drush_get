@@ -710,6 +710,9 @@ function drush_get_single_site($source_site_alias) {
   drush_log(dt("Locally copied site will be given database '@local_db' .", $strings), 'ok');
 
   drush_log(var_export($local_site_spec, 1), 'info');
+  $sa_result = drush_invoke_process($local_site_alias, 'site-alias', [$local_site_alias], []);
+
+
   if (!drush_confirm('Do the values above look correct?')) {
     drush_log(dt("You may want to exit and try again with the --project-name option set. For other options see drush topic docs-get.", $strings), 'ok');
     return 'Exiting';
@@ -755,6 +758,8 @@ function drush_get_single_site($source_site_alias) {
   else {
     drush_log(dt("Did not create the shorthand note into @shorthand_filepath", $strings), 'notice');
   }
+  // To help the project, generate site-aliases in the drush dir.
+  $sa_result = drush_invoke_process($local_site_alias, 'site-alias', [$local_site_alias], []);
 
   // Reset the yes/no state so it doesn't mess up other logic.
   drush_set_context('DRUSH_AFFIRMATIVE', $affirmative);
@@ -800,8 +805,20 @@ function drush_get_remote_status($source_site_alias) {
   drush_log(dt('Remote drush version is %remote_drush_version', $strings), 'debug');
   if (floatval($remote_drush_version) < 6) {
     // I think it's 6..?
-    $strings['@remote_drush_version'] = $remote_drush_version;
-    drush_log(dt("Remote drush version found on @source_site_alias was '@remote_drush_version' .\n THIS USUALLY LEADS TO SQL-SYNC problems when different versions of drush try to communicate. You should really try to to upgrade the remote drush to at least 6+, but if not, then the final sql-sync will fail, and you'll have to do it in your own way. \nFor more instructions, see drush topic docs-get", $strings), 'warning');
+    drush_log(dt("Remote drush version found on @source_site_alias was '%remote_drush_version' .\n THIS USUALLY LEADS TO SQL-SYNC problems when different versions of drush try to communicate. You should really try to to upgrade the remote drush to at least 6+, but if not, then the final sql-sync will fail, and you'll have to do it in your own way. \nFor more instructions, see drush topic docs-get", $strings), 'warning');
+    if (!drush_confirm('Do you want to continue anyway?')) {
+      return FALSE;
+    }
+  }
+
+  $remote_drupal_version = isset($remote_status['drupal-version']) ?
+    $remote_status['drupal-version'] : (isset($remote_status['Drupal version']) ?
+      $remote_status['Drupal version'] : FALSE);
+  $strings['%remote_drupal_version'] = $remote_drupal_version;
+  drush_log(dt('Remote drupal version is %remote_drupal_version', $strings), 'debug');
+  if (floatval($remote_drush_version) < 7) {
+    $strings['%remote_drush_version'] = $remote_drush_version;
+    drush_log(dt("Remote drupal version found on @source_site_alias was '%remote_drupal_version' .\n THIS MAY LEAD TO SITE-INSTALL PROBLEMS when different versions of PHP try to work on it.\n You may have to use a different local version of PHP when installing. You may see: 'Error: Call to undefined function db_result()' later on.", $strings), 'warning');
     if (!drush_confirm('Do you want to continue anyway?')) {
       return FALSE;
     }
@@ -893,7 +910,7 @@ function drush_get_codebase($source_site_alias, $local_site_alias, $local_root) 
       drush_log(dt("Rsync result was FALSE, yet no error status reported. This may happen when tunneling or other things are happening..", $strings), 'error');
     }
     // If the alleged failure was a false negative, Bowl on regardless.
-    drush_log("Rsync returned a complaint, but sometimes that's just due to file permissions or conflicts, especially if you are re-downloading to an existing attempt.", 'warning');
+    drush_log("Rsync returned a complaint, but sometimes that's just due to file permissions or conflicts, (or just no files needed) especially if you are re-downloading to an existing attempt.", 'warning');
     print_r($rsynced_success);
     if (!drush_confirm("Do you want to continue anyway?")) {
       return FALSE;
@@ -1085,6 +1102,11 @@ function db_pattern_from_site_spec($site_spec) {
 function drush_get_configure_site_settings($site_spec) {
   $root = $site_spec['root'];
   $site_subdir = $site_spec['path-aliases']['%site'];
+
+  // The permissions that drupal site-install does gets in our way.
+  if (!is_writable("${root}/${site_subdir}")) {
+    chmod("${root}/${site_subdir}", 0775);
+  }
   // It's often necessary to set up some local settings overrides
   // on a local copy.
   // D7 style file path overrides.

@@ -720,9 +720,18 @@ function drush_get_single_site($source_site_alias) {
 
   // BEGIN
   // FETCH CODEBASE
-  if (!drush_get_codebase($source_site_alias, $local_site_alias, $local_root)) {
-    drush_log(dt('Codebase download failed.', $strings), 'fail');
-    return FALSE;
+
+  // See if other methods of downloading are available before rsyncing.
+  // Look for extra clues in the site-alias spec - like git info.
+  // @see https://www.drupal.org/node/1849304
+  $downloaded = drush_get_codebase_from_download($source_site_spec, $local_site_spec);
+
+  // Most sites won't have that spec to use.
+  if (! $downloaded) {
+    if (!drush_get_codebase($source_site_alias, $local_site_alias, $local_root)) {
+      drush_log(dt('Codebase download failed.', $strings), 'fail');
+      return FALSE;
+    }
   }
 
   // SITE INSTALL
@@ -784,7 +793,10 @@ function drush_get_single_site($source_site_alias) {
 function drush_get_remote_status($source_site_alias) {
   $strings['@source_site_alias'] = $source_site_alias;
   drush_log(dt('Attempting to check status of the source site... You should already have the appropriate connection authentication in place to run "drush @source_site_alias status"', $strings), 'info');
-  $remote_status_request = drush_invoke_process($source_site_alias, 'core-status');
+  // This call echoes the result to the screen.
+  // Setting backend_options FALSE seems to quiet that.
+  $backend_options = FALSE;
+  $remote_status_request = drush_invoke_process($source_site_alias, 'core-status', array(), array(), $backend_options);
   $remote_status = $remote_status_request['object'];
   // Status response is different on older drush. Deal with anything we can.
   // 'Drupal bootstrap' drush 7
@@ -798,6 +810,7 @@ function drush_get_remote_status($source_site_alias) {
     drush_log(dt('Source site database status is not available, so pulling stuff from there will fail. This problem needs to be fixed before we can continue', $strings), 'error');
     return FALSE;
   }
+
   $remote_drush_version = isset($remote_status['drush-version']) ?
     $remote_status['drush-version'] : (isset($remote_status['Drush version']) ?
       $remote_status['Drush version'] : FALSE);
@@ -919,6 +932,81 @@ function drush_get_codebase($source_site_alias, $local_site_alias, $local_root) 
   drush_log(dt("Completed rsync site files from @source_site_alias to @local_site_alias. We now have a platform to build on.", $strings), 'success');
   return TRUE;
 }
+
+
+/**
+ * If the site-alias had download info, use that.
+ *
+ *   $aliases['my.project.url'] = [
+ *     'root' => '/var/www/my.project.url/htdocs/',
+ *     'uri' => 'my.project.url',
+ *     'download' => [
+ *       'type' => 'git',
+ *       'url' => 'git@gitlab.com:me/my-project.git',
+ *       'revision' => 'master',
+ *      ],
+ *   ];
+ *
+ * @param $source_site_spec
+ * @param $local_site_spec
+ * @return bool
+ */
+function drush_get_codebase_from_download($source_site_spec, $local_site_spec) {
+  if (!empty($source_site_spec['download'])) {
+    // We may have enough information to fetch site from a git checkout.
+    print_r($source_site_spec['download']);
+    $type = $strings['%type'] = $source_site_spec['download']['type'];
+    drush_print(dt('Looks like we may be able to fetch the codebase via %type instead of rsync. This has advantages and disadvantages.', $strings));
+    if (!drush_confirm(dt('Do you want to try this?'))) {
+      return FALSE;
+    }
+    $success = FALSE;
+    switch ($type) {
+      case 'git':
+        // If first time
+        print_r(get_defined_vars());
+        if (!is_dir($local_site_spec['root'])) {
+          $command = 'git';
+          $options = array(
+            'clone',
+            $source_site_spec['download']['url'],
+            $local_site_spec['root']
+          );
+          if (!empty($source_site_spec['download']['revision'])) {
+            $options[] = '--branch ' . $source_site_spec['download']['revision'];
+          }
+
+        }
+        else {
+          // TODO Check if it's a valid git repo first.
+          $command = 'git';
+          $options = array(
+            '-C ' . $local_site_spec['root'],
+            'pull',
+          );
+        }
+
+        $exec = $command . ' ' . implode(' ', $options);
+        drush_log("Running drush command\n" . $exec);
+        $status = drush_shell_exec($exec, 2);
+        break;
+
+      default :
+        drush_log(dt('Download method "%method" is not yet supported.', $strings), 'warning');
+        return FALSE;
+    }
+    if ($success) {
+      drush_log(dt('Successfully fetched codebase from %type download.', $strings), 'success');
+    }
+    else {
+      drush_log(dt('Failed to fetch codebase from %type download.', $strings), 'error');
+      drush_print(print_r(drush_shell_exec_output()));
+    }
+    return $success;
+  }
+  return FALSE;
+}
+
 
 /**
  * @param array $site_spec

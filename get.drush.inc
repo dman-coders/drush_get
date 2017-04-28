@@ -174,14 +174,14 @@ function drush_get_setup() {
   $sampleproject_spec = array(
     'uri' => 'sampleproject.remotehost.demo',
     'name' => 'sampleproject',
-    'role' => 'mirror',
+    'instance' => 'mirror',
   );
   $get_docroot_pattern = drush_get_option('get-docroot-pattern', '/var/www/%short-name/%docroot-name');
   $local_root = drush_get_process_tokens($get_docroot_pattern, $sampleproject_spec);
   $strings['@get-docroot-pattern'] = $get_docroot_pattern;
   $strings['@local_root'] = $local_root;
 
-  $get_uri_pattern = drush_get_option('get-uri-pattern', '%role.%short-name.localhost');
+  $get_uri_pattern = drush_get_option('get-uri-pattern', '%instance.%short-name.localhost');
   $local_uri = drush_get_process_tokens($get_uri_pattern, $sampleproject_spec);
   $strings['@get-uri-pattern'] = $get_uri_pattern;
   $strings['@local_uri'] = $local_uri;
@@ -200,7 +200,7 @@ function drush_get_setup() {
 
   $local_db = db_pattern_from_site_spec($sampleproject_spec);
   $strings['@local_db'] = $local_db;
-  $strings['@get-db-pattern'] = drush_get_option('get-db-pattern', 'mysql://%short-name_%role:%random@127.0.0.1:3306/%short-name_%role');;
+  $strings['@get-db-pattern'] = drush_get_option('get-db-pattern', 'mysql://%short-name_%instance:%random@127.0.0.1:3306/%short-name_%instance');;
   drush_log(dt("Your generic database connection pattern 'get-db-pattern' is '@get-db-pattern' and your database admin user is '@db-su' .", $strings), 'ok');
   drush_log(dt("Locally copied sites will be stored in the database identified like\n  '@local_db' .", $strings), 'ok');
 
@@ -396,8 +396,8 @@ function drush_get_process_tokens($pattern, $site_spec) {
   }
 
   if (!isset($strings['%docroot-name'])) {
-    if (isset($strings['%role'])) {
-      $strings['%docroot-name'] = $strings['%role'];
+    if (isset($strings['%instance'])) {
+      $strings['%docroot-name'] = $strings['%instance'];
     }
     else {
       $strings['%docroot-name'] = 'docroot';
@@ -663,11 +663,11 @@ function drush_get_single_site($source_site_alias) {
   // Derive the local dev site definition.
   $local_site_spec = array(
     'name' => "$short_name",
-    'role' => 'mirror',
+    'instance' => drush_get_option('instance', 'mirror'),
     'path-aliases' => array(),
   );
 
-  $get_uri_pattern = drush_get_option('get-uri-pattern', '%role.%short-name.localhost');
+  $get_uri_pattern = drush_get_option('get-uri-pattern', '%instance.%short-name.localhost');
   $local_uri = drush_get_process_tokens($get_uri_pattern, $local_site_spec);
   $local_site_spec['uri'] = $local_uri;
   $strings['@local_uri'] = $local_uri;
@@ -737,15 +737,17 @@ function drush_get_single_site($source_site_alias) {
     return FALSE;
   }
 
+  // USER FILES
   if (!drush_get_user_files($source_site_alias, $local_site_alias)) {
     drush_log(dt('File sync failed.', $strings), 'fail');
     return FALSE;
   }
 
+  // SITE ALIASES
   // As a developer shortcut, note the site identifier as a text file
   // in the project root.
   // We can use this to avoid too much typing or remembering things.
-  $shorthand_filepath = dirname($local_root) . DIRECTORY_SEPARATOR . $local_site_spec['role'] . '.txt';
+  $shorthand_filepath = dirname($local_root) . DIRECTORY_SEPARATOR . $local_site_spec['instance'] . '.txt';
   $strings['@shorthand_filepath'] = $shorthand_filepath;
   if (is_writable($shorthand_filepath)) {
     file_put_contents($shorthand_filepath, $local_site_alias);
@@ -1070,7 +1072,7 @@ function db_pattern_from_site_spec($site_spec) {
 
   // You should set db_pattern in your own drushrc.php
   // Acquia dev desktop uses port 3306 or 3307 and uses drupaluser.
-  $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name_%role:%random@127.0.0.1:3306/%short-name_%role');
+  $get_db_pattern = drush_get_option('get-db-pattern', 'mysql://%short-name_%instance:%random@127.0.0.1:3306/%short-name_%instance');
   $local_db = drush_get_process_tokens($get_db_pattern, $site_spec);
 
   // Username cannot be too long, or mysql fails. Need to repair that!

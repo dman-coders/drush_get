@@ -114,12 +114,12 @@ The following configs are expected to be put in your
     $options['get-docroot-pattern'] = '/var/www/%short-name/%docroot-name';
 
     # How to name the locally created site instances.
-    $options['get-uri-pattern'] = '%role.%short-name.localhost';
+    $options['get-uri-pattern'] = '%instance.%short-name.localhost';
 
     # When provisioning a db (if not using Aegir or DevDesktop)
     # what pattern to use.
     # NOTE: in some environments there is a significant difference between 'localhost' and '127.0.0.1'
-    $options['get-db-pattern'] = 'mysql://%short-name:%random@127.0.0.1:3306/%short-name_%role';
+    $options['get-db-pattern'] = 'mysql://%short-name:%random@127.0.0.1:3306/%short-name_%instance';
 
     # For drush site-install and drush get.
     # DB connection settings appropriate for administering local MySQL.
@@ -164,7 +164,7 @@ A simple static pattern may be
   - the 'uri' from the site alias.
   
   `%docroot-name` will be the first one of :
-  - the 'role' from site-alias if set, eg 'dev', 'test', 'uat'.
+  - the 'instance' from site-alias if set, eg 'dev', 'test', 'uat'.
   - the string 'docroot'
 
 ### get-db-pattern

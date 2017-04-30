@@ -420,6 +420,12 @@ function drush_get_process_tokens($pattern, $site_spec) {
  * This is a copy of Drupal core's user_password() function.
  * as duplicated by provision.inc also.
  *
+ * @param int $length
+ *   Length of random string.
+ *
+ * @return string
+ *   Random string.
+ *
  * @see user_password()
  */
 function _drush_get_random($length = 10) {
@@ -536,7 +542,7 @@ function drush_get_whois($site_alias) {
  *
  * @param string $site_alias
  *   Site identifier.
- * @param string $site_spec_string
+ * @param array|string $site_spec_string
  *   PHP config file snippet.
  * @param bool $overwrite
  *   Whether to overwrite an existing file found there.
@@ -544,15 +550,18 @@ function drush_get_whois($site_alias) {
  * @return bool|string
  *   The successfully saved filepath. FALSE on failure.
  */
-function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE) {
+function drush_get_save_alias($site_alias, $site_spec, $overwrite = FALSE) {
   if (empty($site_alias) || empty($site_alias)) {
     drush_log(dt('Empty parameters given to @FUNCTION', array('@FUNCTION' => __FUNCTION__)), 'warning');
     return FALSE;
   }
   // OK, if you gave me a site_spec array, I can deal with that also.
   // Cast it to a config string on the fly here.
-  if (is_array($site_spec_string) && !empty($site_spec_string['#name'])) {
-    $site_spec_string = '$aliases["' . $site_spec_string['#name'] . '"] = ' . var_export($site_spec_string, TRUE) . ';' . PHP_EOL;
+  if (is_array($site_spec) && !empty($site_spec['#name'])) {
+    $site_spec_string = '$aliases["' . $site_spec['#name'] . '"] = ' . var_export($site_spec, TRUE) . ';' . PHP_EOL;
+  }
+  else {
+    $site_spec_string = $site_spec;
   }
 
   $alias_path = drush_get_alias_path();
@@ -568,7 +577,7 @@ function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE
   }
 
   // Prepare and save that info locally.
-  $file_contents = '<?php' . PHP_EOL . $site_spec_string;
+  $file_contents = '<' . '?php' . PHP_EOL . $site_spec_string;
   $success = file_put_contents($alias_filepath, $file_contents);
 
   if (!$success) {
@@ -635,6 +644,8 @@ function drush_get_site() {
  * this one just ties them all together.
  *
  * @param $source_site_alias
+ *
+ * @return bool  Success.
  */
 function drush_get_single_site($source_site_alias) {
   // Sometimes we override the drush '--yes' flag temporarily.
@@ -706,10 +717,21 @@ function drush_get_single_site($source_site_alias) {
   // (which is not quite right as it fudges it)
   // or edit sites.php to redirect 'default' => $local_uri
   // which is more official.
-  $sites_subdir = $site_spec['uri'];
+  #$sites_subdir = $local_site_spec['uri'];
   $sites_subdir = 'default';
   $local_site_spec['path-aliases']['%site'] = "sites/${sites_subdir}";
   $strings['%sites_subdir'] = "sites/${sites_subdir}";
+
+  // Look ahead to see if the local site already exists -
+  // This would be the case if we are resetting or re-downloading a previous
+  // copy.
+  $local_status = drush_invoke_process($local_site_spec, 'status', array(), array(), FALSE);
+  // If that came back as bootstrapped,
+  // then we have a local working environment already,
+  // so can skip the hard site-install, and re-use the db credentials.
+  if (!empty($local_status['object']['bootstrap']) || !empty($local_status['object']['Database'])) {
+    $local_site_spec['#bootstrap'] = TRUE;
+  }
 
   // What will the new db connection be?
   $local_db = db_pattern_from_site_spec($local_site_spec);
@@ -718,8 +740,7 @@ function drush_get_single_site($source_site_alias) {
   drush_log(dt("Locally copied site will be given database '@local_db' .", $strings), 'ok');
 
   drush_print(var_export($local_site_spec, 1));
-  $sa_result = drush_invoke_process($local_site_alias, 'site-alias', [$local_site_alias], []);
-
+  // $sa_result = drush_invoke_process($local_site_alias, 'site-alias', [$local_site_alias], []);
 
   if (!drush_confirm('Do the values above look correct?')) {
     drush_log(dt("You may want to exit and try again with the --project-name option set. For other options see drush topic docs-get.", $strings), 'ok');
@@ -753,10 +774,13 @@ function drush_get_single_site($source_site_alias) {
   // Now initialize a site directory in the new platform.
   // The site we install will be redundant, but the process of installing a
   // site is expected to do a lot of housekeeping.
-  if (!drush_get_site_setup($local_site_spec)) {
+  if (!drush_get_site_setup($source_site_spec, $local_site_spec)) {
     drush_log(dt('Site install failed.', $strings), 'fail');
     return FALSE;
   }
+
+  // Set up some config hints, so we can work on the site asap.
+  drush_get_configure_project_drush($source_site_spec, $local_site_spec);
 
   // DATABASE
   if (!drush_get_database($source_site_alias, $local_site_alias)) {
@@ -768,31 +792,6 @@ function drush_get_single_site($source_site_alias) {
   if (!drush_get_user_files($source_site_alias, $local_site_alias)) {
     drush_log(dt('File sync failed.', $strings), 'fail');
     return FALSE;
-  }
-
-  // SITE ALIASES
-  // As a developer shortcut, note the site identifier in local configs.
-  // We can use this to avoid too much typing or remembering things.
-  if (is_writable(dirname($local_root))) {
-    $drush_dir = dirname($local_root) . DIRECTORY_SEPARATOR . 'drush';
-    if (! is_dir($drush_dir)){
-      mkdir($drush_dir);
-    }
-
-    // To help the project, generate site-aliases in the drush dir.
-    // Use our own drush_get_save_alias routine to save that out.
-    // Reset the global-ish save-alias path to do this.
-    drush_set_option('alias-path', $drush_dir);
-    drush_get_save_alias($local_site_spec['instance'], $local_site_spec);
-    drush_print("You should be able to address this site instance as %instance from the project context if you want.");
-
-    drush_get_save_alias('source', $source_site_spec);
-    drush_print("You should be able to address this site instance as @source from the project context if you want.");
-
-    // Even older shorthand for bash checks
-    $shorthand_filepath = dirname($local_root) . DIRECTORY_SEPARATOR . $local_site_spec['instance'] . '.txt';
-    $strings['@shorthand_filepath'] = $shorthand_filepath;
-    file_put_contents($shorthand_filepath, $local_site_alias);
   }
 
   // Reset the yes/no state so it doesn't mess up other logic.
@@ -1032,9 +1031,9 @@ function drush_get_codebase_from_download($source_site_spec, $local_site_spec) {
   return FALSE;
 }
 
-function drush_get_configure_site_settings($site_spec) {
-  $root = $site_spec['root'];
-  $site_subdir = $site_spec['path-aliases']['%site'];
+function drush_get_configure_site_settings($source_site_spec, $local_site_spec) {
+  $root = $local_site_spec['root'];
+  $site_subdir = $local_site_spec['path-aliases']['%site'];
 
   // The permissions that drupal site-install does gets in our way.
   if (!is_writable("${root}/${site_subdir}")) {
@@ -1044,34 +1043,41 @@ function drush_get_configure_site_settings($site_spec) {
   // This file should almost always be unique and not in source control.
   $settings_file = "${root}/${site_subdir}/settings.php";
   if (file_exists($settings_file)) {
+    // Before a clean site-install, any pre-existing settings.php - if present -
+    // is likely to get in the way, either because it contains remote details
+    // or is just invalid. Or already has its permissions locked.
+    // Deleting it is the easiest way to give site-install a clean run.
     drush_log("Pre-existing settings file found in site subdir. This can cause much confusion.", 'warning');
     if (!is_writable("${root}/${site_subdir}/settings.php")) {
       chmod("${root}/${site_subdir}/settings.php", 0775);
     }
-    // If it exists and is valid, offer to re-use it.
-    // If it's invalid, it's best to discard it.
-    // Test current version.
-    $local_status = drush_invoke_process($site_spec, 'status');
-    // If that came back as bootstrapped,
-    // then we have a local working environment already,
-    // so can skip the site-install, and re-use the db credentials.
-    if ($local_status['object']['bootstrap'] == 'successful') {
+    // If it exists and is valid, however, offer to re-use it.
+    // This avoids busting up ADD or XAMMP or other local setups that may want
+    // to be retained.
+    //
+    // If we have a local working environment already,
+    // we can skip the from-scratch site-install, and re-use the db credentials.
+    if (!empty($local_site_spec['#bootstrap'])) {
       // A valid D6 site is already in place here.
       // TODO Drupal7/8 response checks.
+      drush_log("Pre-existing site seems valid. We will leave it in place and recycle it, using the same database.", 'warning');
     }
-
-    drush_log("We will replace it with a new local one.\nPer-instance site settings will be discarded, as we usually do not want live proxy, db, varnish, security etc settings down on local. If you do want them, you should update local.settings.php yourself.");
-    drush_log("Need to discard existing $settings_file .", 'notice');
-    $deleted = unlink($settings_file);
-    if (file_exists($settings_file)) {
-      drush_log("Failed to remove previous $settings_file . Sometimes permissions can cause trouble writing to this directory.", 'error');
+    else {
+      drush_log("Pre-existing site seems broken. We will wipe and rebuild it..", 'warning');
+      drush_log("We will replace it with a new local one.\nPer-instance site settings will be discarded, as we usually do not want live proxy, db, varnish, security etc settings down on local. If you do want them, you should update local.settings.php yourself.");
+      drush_log("Need to discard existing $settings_file .", 'notice');
+      $deleted = unlink($settings_file);
+      if (file_exists($settings_file)) {
+        drush_log("Failed to remove previous $settings_file . Sometimes permissions can cause trouble writing to this directory.", 'error');
+      }
     }
   }
-
 
   // It's often necessary to set up some local settings overrides
   // on a local copy.
   // File path overrides.
+  // Also optional stage_file_proxy settings (if enabled).
+  $source_uri = $source_site_spec['uri'];
   $settings_local = "<" . "?" . "php
     // D7 compatibility
     \$conf['file_private_path']   = '${site_subdir}/private/files';
@@ -1080,30 +1086,27 @@ function drush_get_configure_site_settings($site_spec) {
     // D6 compatibility
     \$conf['file_directory_path'] =  \$conf['file_public_path'];
     \$conf['file_directory_temp'] =  \$conf['file_temporary_path'];
+    
+    \$conf['stage_file_proxy_origin'] = 'http://${source_uri}';
+    \$conf['stage_file_proxy_hotlink'] = TRUE;
   ";
   $saved = file_put_contents("${root}/${site_subdir}/settings.local.php", $settings_local);
   if (!$saved) {
     drush_log("Failed to update ${site_subdir}/settings.local.php . Sometimes permissions can cause trouble writing to this directory.", 'error');
   }
-  // It's hard to edit the settings file after permissions change,
-  // It's easier to edit default.settings and let it get copied
-  // before running site-install.
+
+  // It's hard to edit the settings file before the first site-install has run.
+  // It's easier to edit default.settings and let it get copied.
   $use_settings_local = "
-  # Additional site configuration settings.
-  if (file_exists(__DIR__ . '/settings.local.php')) {
-    include_once(__DIR__ . '/settings.local.php');
-  }
+    # Additional site configuration settings.
+    if (file_exists(__DIR__ . '/settings.local.php')) {
+      include_once(__DIR__ . '/settings.local.php');
+    }
   ";
   $saved = file_put_contents("${root}/${site_subdir}/default.settings.php", $use_settings_local, FILE_APPEND);
   if (!$saved) {
     drush_log("Failed to update /${site_subdir}/default.settings.php . Sometimes permissions can cause trouble writing to this directory.", 'error');
   }
-
-  // Before a clean site-install, any pre-existing settings.php - if present -
-  // is likely to get in the way, either because it contains remote details
-  // or is just invalid. Or already has its permissions locked.
-  // Deleting it is the easiest way to give site-install
-  // a clean run.
 
   // I thought site-install would have ensured these folders were set up.
   // But maybe not always.
@@ -1117,6 +1120,41 @@ function drush_get_configure_site_settings($site_spec) {
     if (!is_dir("${root}/$dir")) {
       mkdir("${root}/$dir");
     }
+  }
+  // If running locally as default sitedir, or under ADD, it's nice to leave a
+  // hint in drushrc.php to help do things like drush uli.
+  $local_uri = $local_site_spec['uri'];
+  $drushrc = "<" . "?" . "php
+    \$conf['uri'] = '${local_uri}';
+  ";
+  $saved = file_put_contents("${root}/${site_subdir}/drushrc.php", $drushrc);
+}
+
+function drush_get_configure_project_drush($source_site_spec, $local_site_spec) {
+  // SITE ALIASES
+  // As a developer shortcut, note the site identifier in local configs.
+  // We can use this to avoid too much typing or remembering things.
+  $project_dir = dirname($local_site_spec['root']);
+  if (is_writable($project_dir)) {
+    $drush_dir = $project_dir . DIRECTORY_SEPARATOR . 'drush';
+    if (! is_dir($drush_dir)){
+      mkdir($drush_dir);
+    }
+    // To help the project, generate site-aliases in the drush dir.
+    // Use our own drush_get_save_alias routine to save that out.
+    // Reset the global-ish save-alias path to do this.
+    drush_set_option('alias-path', $drush_dir);
+    drush_get_save_alias($local_site_spec['instance'], $local_site_spec);
+    drush_print("You should be able to address this site instance as %instance from the project context if you want.");
+
+    // Don't copy & paste this one, use inheritence.
+    $source_site_spec_wrapper = array('parent' => '@' . $source_site_spec['#name']);
+    drush_get_save_alias('source', $source_site_spec_wrapper);
+    drush_print("You should be able to address this site instance as @source from the project context if you want.");
+
+    // Even older shorthand for bash checks
+    $shorthand_filepath = $project_dir . DIRECTORY_SEPARATOR . $local_site_spec['instance'] . '.txt';
+    file_put_contents($shorthand_filepath, '@' . $local_site_spec['uri']);
   }
 }
 
@@ -1137,20 +1175,29 @@ function drush_get_configure_site_settings($site_spec) {
  * @param array $site_spec
  * @return bool
  */
-function drush_get_site_setup($site_spec) {
-  $alias = $strings['%alias'] = $site_spec['alias'];
-  $subdir = preg_replace('#sites/#', '', $site_spec['path-aliases']['%site']);
+function drush_get_site_setup($source_site_spec, $local_site_spec) {
+  $alias = $strings['%alias'] = $local_site_spec['alias'];
+  $subdir = preg_replace('#sites/#', '', $local_site_spec['path-aliases']['%site']);
   $strings['%subdir'] = $subdir;
 
   $site_install_args = array();
   $site_install_options = array(
-    "--db-url=" . $site_spec['db-url'],
     "--sites-subdir=" . $subdir,
   );
   $backend_options = array('interactive' => TRUE);
 
   // Adjust local file storage rules and prep local.settings.php.
-  drush_get_configure_site_settings($site_spec);
+  drush_get_configure_site_settings($source_site_spec, $local_site_spec);
+
+  if (empty($local_site_spec['#bootstrap'])) {
+    $site_install_options[] = "--db-url=" . $local_site_spec['db-url'];
+  }
+  else {
+    // If there was a pre-existing working site, use the existing db creds
+    // that are already in the settings.php.
+    // This is so we don't fight with Aegir or ADD
+    // over ownership of settings.php.
+  }
 
   // When running drush_invoke_process, we may find ourselves running
   // a totally different version of drush!
@@ -1167,10 +1214,12 @@ function drush_get_site_setup($site_spec) {
 
   // This may return a response array.
   $site_install_success = !$site_install_result['error_status'];
-
+print_r(
+  $site_install_success
+);
   if ($site_install_success) {
-    drush_log(dt("Site Install seems to have been a success.", $strings), 'success');
-    drush_log(dt("You can probably run `drush %alias runserver --uri=@local_uri /` and see it working. (Currently empty, DB to come)", $strings), 'ok');
+    drush_log(dt("Site Install seems to have been a success. (Currently empty, DB to come)", $strings), 'success');
+    drush_log(dt("You can probably run `drush %alias runserver --uri=@local_uri /` and see it working. ", $strings), 'ok');
   }
   else {
     drush_log(dt("Site Install seems to have failed.", $strings), 'error');
@@ -1312,11 +1361,13 @@ function db_pattern_from_site_spec($site_spec) {
   // Username cannot be too long, or mysql fails. Need to repair that!
   $db_spec = drush_convert_db_from_db_url($local_db);
   $db_spec['username'] = substr($db_spec['username'], 0, 16);
-  // This func unavailable in drush <= 6
-  drush_log("drush version " . DRUSH_MAJOR_VERSION , 'error');
-  if (intval(DRUSH_MAJOR_VERSION) < 7) {
-    require_once(__DIR__ . '/get.drush6.inc');
-  }
   $db_url = drush_sitealias_convert_db_spec_to_db_url($db_spec);
   return $db_url;
+}
+
+// Some funcs are unavailable in drush <= 6. Load a backport stub lib.
+if (intval(DRUSH_MAJOR_VERSION) < 7) {
+  // provides:
+  // drush_sitealias_convert_db_spec_to_db_url()
+  require_once(__DIR__ . '/get.drush6.inc');
 }

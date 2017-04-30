@@ -11,7 +11,13 @@
  * quicker and use local dev environments (eg acquia dev desktop) more
  * efficiently..
  *
- * Requires Drush 7+
+ * Tested against Drush 8, but attempts to be compatible with Drush 6 enough
+ * to be able to talk to old sites.
+ *
+ * Not sure about the significance of '%' VS '@' used in the drush_log
+ * $strings replacements. They were used interchangably depending on the year.
+ *
+ *
  */
 
 /**
@@ -632,7 +638,6 @@ function drush_get_single_site($source_site_alias) {
   // Sometimes we override the drush '--yes' flag temporarily.
   $affirmative = drush_get_context('DRUSH_AFFIRMATIVE');
 
-
   $strings['@source_site_alias'] = $source_site_alias;
   drush_log(dt("Attempting to fetch @source_site_alias", $strings), 'info');
 
@@ -646,7 +651,7 @@ function drush_get_single_site($source_site_alias) {
   $strings['@remote-host'] = $source_site_spec['remote-host'];
   drush_log(dt('Info retrieved describing @source_site_alias. It is in @source_root on @remote-host .', $strings), 'success');
 
-  if (!drush_get_remote_status($source_site_alias)) {
+  if (!($remote_drupal_version = drush_get_remote_status($source_site_alias))) {
     drush_log(dt('Remote site cannot be worked with.', $strings), 'fail');
     return FALSE;
   }
@@ -657,13 +662,14 @@ function drush_get_single_site($source_site_alias) {
   // * A file-copy down
   // * Database sync down
   // * Local status check.
-  $short_name = short_name_from_site_spec($source_site_spec);
-  $strings['@short_name'] = $short_name;
+  $short_name = drush_get_short_name_from_site_spec($source_site_spec);
+  $strings['%short_name'] = $short_name;
+  $instance = $strings['%instance'] = drush_get_option('instance', 'mirror');
 
   // Derive the local dev site definition.
   $local_site_spec = array(
-    'name' => "$short_name",
-    'instance' => drush_get_option('instance', 'mirror'),
+    'name' => $short_name,
+    'instance' => $instance,
     'path-aliases' => array(),
   );
 
@@ -683,7 +689,7 @@ function drush_get_single_site($source_site_alias) {
   $local_site_alias = "$local_root/#$local_uri";
   $local_site_spec['alias'] = $local_site_alias;
   $strings['@local_site_alias'] = $local_site_alias;
-  drush_log(dt("Your downloaded project will have the short_name:@short_name.", $strings), 'ok');
+  drush_log(dt("Your downloaded project will have the short_name:%short_name.", $strings), 'ok');
   drush_log(dt("Locally copied site '@local_uri' will be deployed into '@local_root' .", $strings), 'ok');
 
   // If we want to continue emulating multisites locally, set sites-subdir.
@@ -709,7 +715,7 @@ function drush_get_single_site($source_site_alias) {
   $strings['@local_db'] = $local_db;
   drush_log(dt("Locally copied site will be given database '@local_db' .", $strings), 'ok');
 
-  drush_log(var_export($local_site_spec, 1), 'info');
+  drush_print(var_export($local_site_spec, 1));
   $sa_result = drush_invoke_process($local_site_alias, 'site-alias', [$local_site_alias], []);
 
 
@@ -735,6 +741,13 @@ function drush_get_single_site($source_site_alias) {
   }
 
   // SITE INSTALL
+  //
+  // BIG WARNING about drupal6 unresolved site-install issues.
+  if ($remote_drupal_version < 7) {
+    drush_log(dt("With very old Drupal versions, modern site-install may fail.", $strings), 'warning');
+    drush_log(dt("If you see errors like 'Call to undefined function db_result()' then it's best you run install.php locally yourself at this point.", $strings), 'warning');
+  }
+
   // Now initialize a site directory in the new platform.
   // The site we install will be redundant, but the process of installing a
   // site is expected to do a lot of housekeeping.
@@ -756,19 +769,32 @@ function drush_get_single_site($source_site_alias) {
   }
 
   // SITE ALIASES
-  // As a developer shortcut, note the site identifier as a text file
-  // in the project root.
+  // As a developer shortcut, note the site identifier in local configs.
   // We can use this to avoid too much typing or remembering things.
-  $shorthand_filepath = dirname($local_root) . DIRECTORY_SEPARATOR . $local_site_spec['instance'] . '.txt';
-  $strings['@shorthand_filepath'] = $shorthand_filepath;
-  if (is_writable($shorthand_filepath)) {
+  if (is_writable(dirname($local_root))) {
+    $drush_dir = dirname($local_root) . DIRECTORY_SEPARATOR . 'drush';
+    if (! is_dir($drush_dir)){
+      mkdir($drush_dir);
+    }
+
+    // To help the project, generate site-aliases in the drush dir.
+    # $sa_result = drush_invoke_process($local_site_alias, 'site-alias', [$local_site_alias], []);
+
+    $instance_site_alias_file = $drush_dir . DIRECTORY_SEPARATOR . $local_site_spec['instance'] . '.alias.drushrc.php';
+    $instance_site_alias_php = "<" . "?php" . "\n" . var_export($local_site_spec, TRUE);
+    file_put_contents($instance_site_alias_file, $instance_site_alias_php);
+    drush_print("You should be able to address this site instance as @%instance from the project context if you want.");
+
+    $instance_site_alias_file = $drush_dir . DIRECTORY_SEPARATOR . 'source' . '.alias.drushrc.php';
+    $instance_site_alias_php = "<" . "?php" . "\n" . var_export($source_site_spec, TRUE);
+    file_put_contents($instance_site_alias_file, $instance_site_alias_php);
+    drush_print("You should be able to address this site instance as @source from the project context if you want.");
+
+    // Even older shorthand for bash checks
+    $shorthand_filepath = dirname($local_root) . DIRECTORY_SEPARATOR . $local_site_spec['instance'] . '.txt';
+    $strings['@shorthand_filepath'] = $shorthand_filepath;
     file_put_contents($shorthand_filepath, $local_site_alias);
   }
-  else {
-    drush_log(dt("Did not create the shorthand note into @shorthand_filepath", $strings), 'notice');
-  }
-  // To help the project, generate site-aliases in the drush dir.
-  $sa_result = drush_invoke_process($local_site_alias, 'site-alias', [$local_site_alias], []);
 
   // Reset the yes/no state so it doesn't mess up other logic.
   drush_set_context('DRUSH_AFFIRMATIVE', $affirmative);
@@ -787,8 +813,9 @@ function drush_get_single_site($source_site_alias) {
 /**
  * Sanity-check the remote site.
  *
- * @return bool
- *   Whether we can continue.
+ * @return bool|float
+ *   FALSE if we cannot continue.
+ *   Drupal version if bootstrap was found.
  */
 function drush_get_remote_status($source_site_alias) {
   $strings['@source_site_alias'] = $source_site_alias;
@@ -817,7 +844,6 @@ function drush_get_remote_status($source_site_alias) {
   $strings['%remote_drush_version'] = $remote_drush_version;
   drush_log(dt('Remote drush version is %remote_drush_version', $strings), 'debug');
   if (floatval($remote_drush_version) < 6) {
-    // I think it's 6..?
     drush_log(dt("Remote drush version found on @source_site_alias was '%remote_drush_version' .\n THIS USUALLY LEADS TO SQL-SYNC problems when different versions of drush try to communicate. You should really try to to upgrade the remote drush to at least 6+, but if not, then the final sql-sync will fail, and you'll have to do it in your own way. \nFor more instructions, see drush topic docs-get", $strings), 'warning');
     if (!drush_confirm('Do you want to continue anyway?')) {
       return FALSE;
@@ -829,14 +855,13 @@ function drush_get_remote_status($source_site_alias) {
       $remote_status['Drupal version'] : FALSE);
   $strings['%remote_drupal_version'] = $remote_drupal_version;
   drush_log(dt('Remote drupal version is %remote_drupal_version', $strings), 'debug');
-  if (floatval($remote_drush_version) < 7) {
-    $strings['%remote_drush_version'] = $remote_drush_version;
+  if (floatval($remote_drupal_version) < 7) {
     drush_log(dt("Remote drupal version found on @source_site_alias was '%remote_drupal_version' .\n THIS MAY LEAD TO SITE-INSTALL PROBLEMS when different versions of PHP try to work on it.\n You may have to use a different local version of PHP when installing. You may see: 'Error: Call to undefined function db_result()' later on.", $strings), 'warning');
     if (!drush_confirm('Do you want to continue anyway?')) {
       return FALSE;
     }
   }
-  return TRUE;
+  return floatval($remote_drupal_version);
 }
 
 /**
@@ -954,7 +979,7 @@ function drush_get_codebase($source_site_alias, $local_site_alias, $local_root) 
 function drush_get_codebase_from_download($source_site_spec, $local_site_spec) {
   if (!empty($source_site_spec['download'])) {
     // We may have enough information to fetch site from a git checkout.
-    print_r($source_site_spec['download']);
+    drush_log(var_export($source_site_spec['download'], 1), 'info');
     $type = $strings['%type'] = $source_site_spec['download']['type'];
     drush_print(dt('Looks like we may be able to fetch the codebase via %type instead of rsync. This has advantages and disadvantages.', $strings));
     if (!drush_confirm(dt('Do you want to try this?'))) {
@@ -964,7 +989,7 @@ function drush_get_codebase_from_download($source_site_spec, $local_site_spec) {
     switch ($type) {
       case 'git':
         // If first time
-        print_r(get_defined_vars());
+        #print_r(get_defined_vars());
         if (!is_dir($local_site_spec['root'])) {
           $command = 'git';
           $options = array(
@@ -988,7 +1013,8 @@ function drush_get_codebase_from_download($source_site_spec, $local_site_spec) {
 
         $exec = $command . ' ' . implode(' ', $options);
         drush_log("Running drush command\n" . $exec);
-        $status = drush_shell_exec($exec, 2);
+        $success = drush_shell_exec($exec, 2);
+        drush_log(print_r(drush_shell_exec_output(), 1), 'debug');
         break;
 
       default :
@@ -1073,6 +1099,10 @@ function drush_get_database($source_site_alias, $local_site_alias) {
     $source_site_alias,
     $local_site_alias,
   );
+  $strings = array(
+    '@source_site_alias' => $source_site_alias,
+    '@local_site_alias' => $local_site_alias,
+  );
   $sql_sync_options = array();
   $backend_options = array('interactive' => TRUE);
   drush_log(dt("About to sync the remote database down. This usually takes time. Effectively running `drush sql-sync @source_site_alias @local_site_alias'", $strings), 'ok');
@@ -1131,7 +1161,7 @@ function drush_get_user_files($source_site_alias, $local_site_alias) {
  *
  * @return string
  */
-function short_name_from_site_spec($site_spec) {
+function drush_get_short_name_from_site_spec($site_spec) {
   // The command may have explicitly defined a name to use for our project.
   // Use that if so.
   if ($projectname = drush_get_option('project-name', '')) {
@@ -1183,6 +1213,11 @@ function db_pattern_from_site_spec($site_spec) {
   // Username cannot be too long, or mysql fails. Need to repair that!
   $db_spec = drush_convert_db_from_db_url($local_db);
   $db_spec['username'] = substr($db_spec['username'], 0, 16);
+  // This func unavailable in drush <= 6
+  drush_log("drush version " . DRUSH_MAJOR_VERSION , 'error');
+  if (intval(DRUSH_MAJOR_VERSION) < 7) {
+    require_once(__DIR__ . '/get.drush6.inc');
+  }
   $db_url = drush_sitealias_convert_db_spec_to_db_url($db_spec);
   return $db_url;
 }
@@ -1195,13 +1230,26 @@ function drush_get_configure_site_settings($site_spec) {
   if (!is_writable("${root}/${site_subdir}")) {
     chmod("${root}/${site_subdir}", 0775);
   }
+  // Warn about the dangers of copying settings.php around.
+  // This file should almost always be unique and not in source control.
+  $settings_file = "${root}/${site_subdir}/settings.php";
+  if (file_exists($settings_file)) {
+    drush_log("Pre-existing settings file found in site subdir. This can cause much confusion. We will replace it with a new local one.\nPer-instance site settings will be discarded, as we usually do not want live proxy, db, varnish, security etc settings down on local. If you do want them, you should update local.settings.php yourself.", 'warning');
+    if (!is_writable("${root}/${site_subdir}/settings.php")) {
+      chmod("${root}/${site_subdir}/settings.php", 0775);
+    }
+  }
   // It's often necessary to set up some local settings overrides
   // on a local copy.
-  // D7 style file path overrides.
+  // File path overrides.
   $settings_local = "<" . "?" . "php
+    // D7 compatibility
     \$conf['file_private_path']   = '${site_subdir}/private/files';
     \$conf['file_public_path']    = '${site_subdir}/files';
     \$conf['file_temporary_path'] = '${site_subdir}/private/temp';
+    // D6 compatibility
+    \$conf['file_directory_path'] =  \$conf['file_public_path'];
+    \$conf['file_directory_temp'] =  \$conf['file_temporary_path'];
   ";
   $saved = file_put_contents("${root}/${site_subdir}/settings.local.php", $settings_local);
   if (!$saved) {

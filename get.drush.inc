@@ -558,6 +558,7 @@ function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE
   $alias_path = drush_get_alias_path();
 
   $clean_site_alias = ltrim($site_alias, '@');
+  $strings['@site_alias'] = $clean_site_alias;
   $alias_filepath = $alias_path . DIRECTORY_SEPARATOR . $clean_site_alias . '.alias.drushrc.php';
   $strings['@alias-filepath'] = $alias_filepath;
 
@@ -582,8 +583,9 @@ function drush_get_save_alias($site_alias, $site_spec_string, $overwrite = FALSE
   // http://php.net/manual/en/function.php-check-syntax.php
   system('php -l ' . $alias_filepath, $ret);
   if ($ret !== 0) {
-    drush_log(dt('Syntax check on the site-alias config code failed. This is unexpected and indicates a problem with the data supplied from upstream. Run this command with --debug on for clues.', $strings), 'error');
-    drush_log(dt('Removing the broken @alias-filepath code file for now.', $strings), 'warning');
+    drush_log(dt(__FUNCTION__ . ' Syntax check on the "@site_alias" site-alias config code failed. This is unexpected and indicates a problem with the data supplied from upstream. Run this command with --debug on for clues.', $strings), 'error');
+    drush_log($file_contents, 'error');
+    drush_log(dt('Removing the broken @alias-filepath code file for now, as it would cause you problems.', $strings), 'warning');
     unlink($alias_filepath);
     return FALSE;
   }
@@ -778,16 +780,13 @@ function drush_get_single_site($source_site_alias) {
     }
 
     // To help the project, generate site-aliases in the drush dir.
-    # $sa_result = drush_invoke_process($local_site_alias, 'site-alias', [$local_site_alias], []);
+    // Use our own drush_get_save_alias routine to save that out.
+    // Reset the global-ish save-alias path to do this.
+    drush_set_option('alias-path', $drush_dir);
+    drush_get_save_alias($local_site_spec['instance'], $local_site_spec);
+    drush_print("You should be able to address this site instance as %instance from the project context if you want.");
 
-    $instance_site_alias_file = $drush_dir . DIRECTORY_SEPARATOR . $local_site_spec['instance'] . '.alias.drushrc.php';
-    $instance_site_alias_php = "<" . "?php" . "\n" . var_export($local_site_spec, TRUE);
-    file_put_contents($instance_site_alias_file, $instance_site_alias_php);
-    drush_print("You should be able to address this site instance as @%instance from the project context if you want.");
-
-    $instance_site_alias_file = $drush_dir . DIRECTORY_SEPARATOR . 'source' . '.alias.drushrc.php';
-    $instance_site_alias_php = "<" . "?php" . "\n" . var_export($source_site_spec, TRUE);
-    file_put_contents($instance_site_alias_file, $instance_site_alias_php);
+    drush_get_save_alias('source', $source_site_spec);
     drush_print("You should be able to address this site instance as @source from the project context if you want.");
 
     // Even older shorthand for bash checks
@@ -856,7 +855,7 @@ function drush_get_remote_status($source_site_alias) {
   $strings['%remote_drupal_version'] = $remote_drupal_version;
   drush_log(dt('Remote drupal version is %remote_drupal_version', $strings), 'debug');
   if (floatval($remote_drupal_version) < 7) {
-    drush_log(dt("Remote drupal version found on @source_site_alias was '%remote_drupal_version' .\n THIS MAY LEAD TO SITE-INSTALL PROBLEMS when different versions of PHP try to work on it.\n You may have to use a different local version of PHP when installing. You may see: 'Error: Call to undefined function db_result()' later on.", $strings), 'warning');
+    drush_log(dt("Remote drupal version found on @source_site_alias was '%remote_drupal_version' .\n THIS MAY LEAD TO SITE-INSTALL PROBLEMS when different versions of PHP try to work on it.\n You may have to use a different local version of PHP or drush when installing. You may see: 'Error: Call to undefined function db_result()' or 'The site install task failed' later on. This is related to limited backwards-comapatibility in drush versions.", $strings), 'warning');
     if (!drush_confirm('Do you want to continue anyway?')) {
       return FALSE;
     }
@@ -1033,8 +1032,108 @@ function drush_get_codebase_from_download($source_site_spec, $local_site_spec) {
   return FALSE;
 }
 
+function drush_get_configure_site_settings($site_spec) {
+  $root = $site_spec['root'];
+  $site_subdir = $site_spec['path-aliases']['%site'];
+
+  // The permissions that drupal site-install does gets in our way.
+  if (!is_writable("${root}/${site_subdir}")) {
+    chmod("${root}/${site_subdir}", 0775);
+  }
+  // Warn about the dangers of copying settings.php around.
+  // This file should almost always be unique and not in source control.
+  $settings_file = "${root}/${site_subdir}/settings.php";
+  if (file_exists($settings_file)) {
+    drush_log("Pre-existing settings file found in site subdir. This can cause much confusion.", 'warning');
+    if (!is_writable("${root}/${site_subdir}/settings.php")) {
+      chmod("${root}/${site_subdir}/settings.php", 0775);
+    }
+    // If it exists and is valid, offer to re-use it.
+    // If it's invalid, it's best to discard it.
+    // Test current version.
+    $local_status = drush_invoke_process($site_spec, 'status');
+    // If that came back as bootstrapped,
+    // then we have a local working environment already,
+    // so can skip the site-install, and re-use the db credentials.
+    if ($local_status['object']['bootstrap'] == 'successful') {
+      // A valid D6 site is already in place here.
+      // TODO Drupal7/8 response checks.
+    }
+
+    drush_log("We will replace it with a new local one.\nPer-instance site settings will be discarded, as we usually do not want live proxy, db, varnish, security etc settings down on local. If you do want them, you should update local.settings.php yourself.");
+    drush_log("Need to discard existing $settings_file .", 'notice');
+    $deleted = unlink($settings_file);
+    if (file_exists($settings_file)) {
+      drush_log("Failed to remove previous $settings_file . Sometimes permissions can cause trouble writing to this directory.", 'error');
+    }
+  }
+
+
+  // It's often necessary to set up some local settings overrides
+  // on a local copy.
+  // File path overrides.
+  $settings_local = "<" . "?" . "php
+    // D7 compatibility
+    \$conf['file_private_path']   = '${site_subdir}/private/files';
+    \$conf['file_public_path']    = '${site_subdir}/files';
+    \$conf['file_temporary_path'] = '${site_subdir}/private/temp';
+    // D6 compatibility
+    \$conf['file_directory_path'] =  \$conf['file_public_path'];
+    \$conf['file_directory_temp'] =  \$conf['file_temporary_path'];
+  ";
+  $saved = file_put_contents("${root}/${site_subdir}/settings.local.php", $settings_local);
+  if (!$saved) {
+    drush_log("Failed to update ${site_subdir}/settings.local.php . Sometimes permissions can cause trouble writing to this directory.", 'error');
+  }
+  // It's hard to edit the settings file after permissions change,
+  // It's easier to edit default.settings and let it get copied
+  // before running site-install.
+  $use_settings_local = "
+  # Additional site configuration settings.
+  if (file_exists(__DIR__ . '/settings.local.php')) {
+    include_once(__DIR__ . '/settings.local.php');
+  }
+  ";
+  $saved = file_put_contents("${root}/${site_subdir}/default.settings.php", $use_settings_local, FILE_APPEND);
+  if (!$saved) {
+    drush_log("Failed to update /${site_subdir}/default.settings.php . Sometimes permissions can cause trouble writing to this directory.", 'error');
+  }
+
+  // Before a clean site-install, any pre-existing settings.php - if present -
+  // is likely to get in the way, either because it contains remote details
+  // or is just invalid. Or already has its permissions locked.
+  // Deleting it is the easiest way to give site-install
+  // a clean run.
+
+  // I thought site-install would have ensured these folders were set up.
+  // But maybe not always.
+  $dirs = [
+    "${site_subdir}/files",
+    "${site_subdir}/private",
+    "${site_subdir}/private/files",
+    "${site_subdir}/private/temp",
+  ];
+  foreach ($dirs as $dir) {
+    if (!is_dir("${root}/$dir")) {
+      mkdir("${root}/$dir");
+    }
+  }
+}
 
 /**
+ * Prepare the site directory and settings.php inside it.
+ *
+ * Most of the downloads leading to here should NOT have produced a settings.php
+ * as they are excluded by rsync, and (should be) ignored by source control.
+ * So if one exists, it may be because
+ * - we are re-downloading in place OR
+ * - it's wrong.
+ *
+ * If it's wrong, we can find out by bootstrapping.
+ * If it bootstraps, it smells like it's local and valid
+ * (such as by XAMMP or ADD)
+ * So check if we want to blow it away and remake, or recycle the exisiting.
+ *
  * @param array $site_spec
  * @return bool
  */
@@ -1220,81 +1319,4 @@ function db_pattern_from_site_spec($site_spec) {
   }
   $db_url = drush_sitealias_convert_db_spec_to_db_url($db_spec);
   return $db_url;
-}
-
-function drush_get_configure_site_settings($site_spec) {
-  $root = $site_spec['root'];
-  $site_subdir = $site_spec['path-aliases']['%site'];
-
-  // The permissions that drupal site-install does gets in our way.
-  if (!is_writable("${root}/${site_subdir}")) {
-    chmod("${root}/${site_subdir}", 0775);
-  }
-  // Warn about the dangers of copying settings.php around.
-  // This file should almost always be unique and not in source control.
-  $settings_file = "${root}/${site_subdir}/settings.php";
-  if (file_exists($settings_file)) {
-    drush_log("Pre-existing settings file found in site subdir. This can cause much confusion. We will replace it with a new local one.\nPer-instance site settings will be discarded, as we usually do not want live proxy, db, varnish, security etc settings down on local. If you do want them, you should update local.settings.php yourself.", 'warning');
-    if (!is_writable("${root}/${site_subdir}/settings.php")) {
-      chmod("${root}/${site_subdir}/settings.php", 0775);
-    }
-  }
-  // It's often necessary to set up some local settings overrides
-  // on a local copy.
-  // File path overrides.
-  $settings_local = "<" . "?" . "php
-    // D7 compatibility
-    \$conf['file_private_path']   = '${site_subdir}/private/files';
-    \$conf['file_public_path']    = '${site_subdir}/files';
-    \$conf['file_temporary_path'] = '${site_subdir}/private/temp';
-    // D6 compatibility
-    \$conf['file_directory_path'] =  \$conf['file_public_path'];
-    \$conf['file_directory_temp'] =  \$conf['file_temporary_path'];
-  ";
-  $saved = file_put_contents("${root}/${site_subdir}/settings.local.php", $settings_local);
-  if (!$saved) {
-    drush_log("Failed to update ${site_subdir}/settings.local.php . Sometimes permissions can cause trouble writing to this directory.", 'error');
-  }
-  // It's hard to edit the settings file after permissions change,
-  // It's easier to edit default.settings and let it get copied
-  // before running site-install.
-  $use_settings_local = "
-  # Additional site configuration settings.
-  if (file_exists(__DIR__ . '/settings.local.php')) {
-    include_once(__DIR__ . '/settings.local.php');
-  }
-  ";
-  $saved = file_put_contents("${root}/${site_subdir}/default.settings.php", $use_settings_local, FILE_APPEND);
-  if (!$saved) {
-    drush_log("Failed to update /${site_subdir}/default.settings.php . Sometimes permissions can cause trouble writing to this directory.", 'error');
-  }
-
-  $existing_settings_file = "${root}/${site_subdir}/settings.php";
-  if (file_exists($existing_settings_file)) {
-    drush_log("Need to discard existing $existing_settings_file .", 'notice');
-    $deleted = unlink($existing_settings_file);
-    if (file_exists($existing_settings_file)) {
-      drush_log("Failed to remove previous $existing_settings_file . Sometimes permissions can cause trouble writing to this directory.", 'error');
-    }
-  }
-
-  // Before a clean site-install, any pre-existing settings.php - if present -
-  // is likely to get in the way, either because it contains remote details
-  // or is just invalid. Or already has its permissions locked.
-  // Deleting it is the easiest way to give site-install
-  // a clean run.
-
-  // I thought site-install would have ensured these folders were set up.
-  // But maybe not always.
-  $dirs = [
-    "${site_subdir}/files",
-    "${site_subdir}/private",
-    "${site_subdir}/private/files",
-    "${site_subdir}/private/temp",
-  ];
-  foreach ($dirs as $dir) {
-    if (!is_dir("${root}/$dir")) {
-      mkdir("${root}/$dir");
-    }
-  }
 }

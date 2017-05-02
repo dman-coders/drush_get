@@ -557,8 +557,8 @@ function drush_get_save_alias($site_alias, $site_spec, $overwrite = FALSE) {
   }
   // OK, if you gave me a site_spec array, I can deal with that also.
   // Cast it to a config string on the fly here.
-  if (is_array($site_spec) && !empty($site_spec['#name'])) {
-    $site_spec_string = '$aliases["' . $site_spec['#name'] . '"] = ' . var_export($site_spec, TRUE) . ';' . PHP_EOL;
+  if (is_array($site_spec)) {
+    $site_spec_string = '$aliases["' . $site_alias . '"] = ' . var_export($site_spec, TRUE) . ';' . PHP_EOL;
   }
   else {
     $site_spec_string = $site_spec;
@@ -593,7 +593,7 @@ function drush_get_save_alias($site_alias, $site_spec, $overwrite = FALSE) {
   system('php -l ' . $alias_filepath, $ret);
   if ($ret !== 0) {
     drush_log(dt(__FUNCTION__ . ' Syntax check on the "@site_alias" site-alias config code failed. This is unexpected and indicates a problem with the data supplied from upstream. Run this command with --debug on for clues.', $strings), 'error');
-    drush_log($file_contents, 'error');
+    drush_log(print_r($file_contents, 1), 'error');
     drush_log(dt('Removing the broken @alias-filepath code file for now, as it would cause you problems.', $strings), 'warning');
     unlink($alias_filepath);
     return FALSE;
@@ -725,13 +725,12 @@ function drush_get_single_site($source_site_alias) {
   // Look ahead to see if the local site already exists -
   // This would be the case if we are resetting or re-downloading a previous
   // copy.
-  $local_status = drush_invoke_process($local_site_spec, 'status', array(), array(), FALSE);
+  if (get_can_bootstrap($local_site_spec)) {
+    $local_site_spec['#bootstrap'] = TRUE;
+  }
   // If that came back as bootstrapped,
   // then we have a local working environment already,
   // so can skip the hard site-install, and re-use the db credentials.
-  if (!empty($local_status['object']['bootstrap']) || !empty($local_status['object']['Database'])) {
-    $local_site_spec['#bootstrap'] = TRUE;
-  }
 
   // What will the new db connection be?
   $local_db = db_pattern_from_site_spec($local_site_spec);
@@ -774,7 +773,17 @@ function drush_get_single_site($source_site_alias) {
   // Now initialize a site directory in the new platform.
   // The site we install will be redundant, but the process of installing a
   // site is expected to do a lot of housekeeping.
-  if (!drush_get_site_setup($source_site_spec, $local_site_spec)) {
+  // It also serves as a smoke-test to ensure that running is possible.
+  $do_site_install = TRUE;
+
+  if ($local_site_spec['#bootstrap']) {
+    drush_log(dt("It's quite OK to skip this first-time step when replacing an existing working copy, if you are planning to downsync later.", $strings), 'warning');
+    if (drush_confirm("Shall we skip the from-scratch re-install?")) {
+      $do_site_install = FALSE;
+    }
+  }
+
+  if ($do_site_install && !drush_get_site_setup($source_site_spec, $local_site_spec)) {
     drush_log(dt('Site install failed.', $strings), 'fail');
     return FALSE;
   }
@@ -782,12 +791,20 @@ function drush_get_single_site($source_site_alias) {
   // Set up some config hints, so we can work on the site asap.
   drush_get_configure_project_drush($source_site_spec, $local_site_spec);
 
+  if (!get_can_bootstrap($local_site_spec)) {
+    // If we can't bootstrap yet, something is wrong and trying to do more
+    // is a bad idea. getting user files will fail with an invalid files dir.
+    drush_log(dt('Bootstrap of new site failed. Halting now to avoid more problems.', $strings), 'fail');
+    drush_set_context('DRUSH_AFFIRMATIVE', FALSE);
+    return FALSE;
+  }
+
   // DATABASE
   if (!drush_get_database($source_site_alias, $local_site_alias)) {
     drush_log(dt('Database sync failed.', $strings), 'fail');
     return FALSE;
   }
-
+  
   // USER FILES
   if (!drush_get_user_files($source_site_alias, $local_site_alias)) {
     drush_log(dt('File sync failed.', $strings), 'fail');
@@ -806,6 +823,15 @@ function drush_get_single_site($source_site_alias) {
     drush_print(dt("Ran stand-alone web server %runserver_success", $strings));
   }
 
+}
+
+function get_can_bootstrap(&$site_spec) {
+  $status = drush_invoke_process($site_spec, 'status', array(), array(), FALSE);
+  if (!empty($status['object']['bootstrap']) || !empty($status['object']['Database'])) {
+    $site_spec['#bootstrap'] = TRUE;
+    return  TRUE;
+  }
+  return FALSE;
 }
 
 /**
@@ -1134,6 +1160,7 @@ function drush_get_configure_project_drush($source_site_spec, $local_site_spec) 
   // SITE ALIASES
   // As a developer shortcut, note the site identifier in local configs.
   // We can use this to avoid too much typing or remembering things.
+  drush_log('Setting up some convenience shortcuts for drush aliases - putting them into the project/drush directory.', 'info');
   $project_dir = dirname($local_site_spec['root']);
   if (is_writable($project_dir)) {
     $drush_dir = $project_dir . DIRECTORY_SEPARATOR . 'drush';
@@ -1144,15 +1171,17 @@ function drush_get_configure_project_drush($source_site_spec, $local_site_spec) 
     // Use our own drush_get_save_alias routine to save that out.
     // Reset the global-ish save-alias path to do this.
     drush_set_option('alias-path', $drush_dir);
+    // EG, to make /drush/mirror.alias.drushrc.php, set the #name.
     drush_get_save_alias($local_site_spec['instance'], $local_site_spec);
-    drush_print("You should be able to address this site instance as %instance from the project context if you want.");
+    $strings['%instance'] = $local_site_spec['instance'];
+    drush_log(dt("You should be able to address this site instance as @%instance from the project context if you want.", $strings), 'info');
 
-    // Don't copy & paste this one, use inheritence.
+    // Don't copy & paste this one, use inheritance.
     $source_site_spec_wrapper = array('parent' => '@' . $source_site_spec['#name']);
     drush_get_save_alias('source', $source_site_spec_wrapper);
-    drush_print("You should be able to address this site instance as @source from the project context if you want.");
+    drush_log(dt("You should be able to address this site instance as @source from the project context if you want.", $strings), 'info');
 
-    // Even older shorthand for bash checks
+    // Even older shorthand for bash checks.
     $shorthand_filepath = $project_dir . DIRECTORY_SEPARATOR . $local_site_spec['instance'] . '.txt';
     file_put_contents($shorthand_filepath, '@' . $local_site_spec['uri']);
   }
@@ -1179,6 +1208,7 @@ function drush_get_site_setup($source_site_spec, $local_site_spec) {
   $alias = $strings['%alias'] = $local_site_spec['alias'];
   $subdir = preg_replace('#sites/#', '', $local_site_spec['path-aliases']['%site']);
   $strings['%subdir'] = $subdir;
+  $strings['%local_db'] = $local_site_spec['db-url'];
 
   $site_install_args = array();
   $site_install_options = array(
@@ -1214,9 +1244,6 @@ function drush_get_site_setup($source_site_spec, $local_site_spec) {
 
   // This may return a response array.
   $site_install_success = !$site_install_result['error_status'];
-print_r(
-  $site_install_success
-);
   if ($site_install_success) {
     drush_log(dt("Site Install seems to have been a success. (Currently empty, DB to come)", $strings), 'success');
     drush_log(dt("You can probably run `drush %alias runserver --uri=@local_uri /` and see it working. ", $strings), 'ok');
@@ -1227,7 +1254,8 @@ print_r(
     $strings['@command'] = "drush $alias site-install " . implode(' ', $site_install_args) . ' ' . implode(' ', $site_install_options);
     drush_log(dt("You'll have to investigate why a command like\n  @command\n failed.", $strings), 'error');
     drush_log(dt("One reason can be file permissions on settings.php when downloading over an existing site.", $strings), 'notice');
-    drush_log(dt("Depending where site-install failed, you should probably DROP the %local_db database before trying again.", $strings), 'error');
+    drush_log(dt("Depending where site-install failed, you should probably DROP the %local_db database before trying again.", $strings), 'notice');
+    drush_log(dt("Also, some older install profiles just do not work with drush-based installs or variant versions of drush and php. If the database came up and you are going to replace it, this can probably be ignored.", $strings), 'notice');
     if (!drush_confirm("Do you want to continue anyway?")) {
       return FALSE;
     }

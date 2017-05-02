@@ -818,7 +818,9 @@ function drush_get_single_site($source_site_alias) {
   drush_print(dt("You can probably run the site now, by invoking: \n  drush @local_site_alias runserver --uri=@local_uri /", $strings));
   drush_print(dt("#########"));
   if (drush_confirm('Do you want to run the server now?')) {
-    $runserver_success = drush_invoke_process($local_site_alias, 'runserver', ['/'], ['--uri=' . $local_uri]);
+    // Try to turn of PHP strict warnings as they are the least of our problems
+    // if trying to debug 'runserver'. (drush > 6 AFAIK)
+    $runserver_success = drush_invoke_process($local_site_alias, 'runserver', ['/'], ['--uri=' . $local_uri, '--variables=error_level=0']);
     $strings['%runserver_success'] = $runserver_success;
     drush_print(dt("Ran stand-alone web server %runserver_success", $strings));
   }
@@ -836,6 +838,10 @@ function get_can_bootstrap(&$site_spec) {
 
 /**
  * Sanity-check the remote site.
+ *
+ * @param string $source_site_alias
+ *   Should be able to supply a version of the site_spec $site_alias_record
+ *   interchangably with the site_alias string.
  *
  * @return bool|float
  *   FALSE if we cannot continue.
@@ -885,7 +891,23 @@ function drush_get_remote_status($source_site_alias) {
       return FALSE;
     }
   }
+
+  // Having the local info know the remote files path or other basic info
+  // would be useful later.
+  // Consider refactoring to hang on to this fetched info.
+
   return floatval($remote_drupal_version);
+}
+
+/**
+ * Perform variable-get on the target site.
+ *
+ * @param $site_alias
+ */
+function drush_get_remote_var($site_alias, $variable) {
+  $remote_status_request = drush_invoke_process($site_alias, 'vget', array($variable), array('--exact'), FALSE);
+  // TODO: Error-checking?
+  return $remote_status_request['output'];
 }
 
 /**
@@ -1103,6 +1125,7 @@ function drush_get_configure_site_settings($source_site_spec, $local_site_spec) 
   // on a local copy.
   // File path overrides.
   // Also optional stage_file_proxy settings (if enabled).
+
   $source_uri = $source_site_spec['uri'];
   $settings_local = "<" . "?" . "php
     // D7 compatibility
@@ -1116,6 +1139,18 @@ function drush_get_configure_site_settings($source_site_spec, $local_site_spec) 
     \$conf['stage_file_proxy_origin'] = 'http://${source_uri}';
     \$conf['stage_file_proxy_hotlink'] = TRUE;
   ";
+
+  if (!isset($source_site_spec['path-aliases']['%files'])) {
+    drush_log('Need to double-check and retrieve the %files path from the remote site. Sorry for the delay.', 'notice');
+    # Using drush_sitealias_evaluate_path() seems like mad overkill.
+    # This is enough to prepopulate %files. A bit slow unfortunately.
+    drush_sitealias_resolve_path_references($source_site_spec, '%files');
+  }
+  if (isset($source_site_spec['path-aliases']['%files'])) {
+    $stage_file_proxy_origin_dir = $source_site_spec['path-aliases']['%files'];
+    $settings_local .= "\n    \$conf['stage_file_proxy_origin_dir'] = '$stage_file_proxy_origin_dir';";
+  }
+
   $saved = file_put_contents("${root}/${site_subdir}/settings.local.php", $settings_local);
   if (!$saved) {
     drush_log("Failed to update ${site_subdir}/settings.local.php . Sometimes permissions can cause trouble writing to this directory.", 'error');

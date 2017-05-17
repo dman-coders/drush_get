@@ -1184,9 +1184,11 @@ function drush_get_configure_site_settings($source_site_spec, $local_site_spec) 
   }
   // If running locally as default sitedir, or under ADD, it's nice to leave a
   // hint in drushrc.php to help do things like drush uli.
+  // Note, uri really means URI with http etc, not just hostname.
   $local_uri = $local_site_spec['uri'];
   $drushrc = "<" . "?" . "php
-    \$conf['uri'] = '${local_uri}';
+    # If using Acquia dev desktop etc, you may want to adjust the port here.
+    \$options['uri'] = 'http://${local_uri}:80';
   ";
   $saved = file_put_contents("${root}/${site_subdir}/drushrc.php", $drushrc);
 }
@@ -1361,6 +1363,9 @@ function drush_get_user_files($source_site_alias, $local_site_alias) {
     ], 1), 'debug');
     $rsynced_result = drush_invoke_process('@self', 'rsync', $rsync_args, $rsync_options, $backend_options);
     // I don't really care about success or failure at this point.
+  }
+  else {
+    drush_print(dt("Not fetching user files. To enable stage_file_proxy and see files on your copy, run:\n  drush dl -y stage_file_proxy; drush en -y stage_file_proxy;"));
   }
   return TRUE;
 }
